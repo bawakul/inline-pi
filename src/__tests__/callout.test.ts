@@ -3,12 +3,13 @@ import {
 	buildCalloutHeader,
 	insertCallout,
 	buildResponseCallout,
-	buildErrorCallout,
 	findCalloutRange,
 	findCalloutBlock,
 	replaceCalloutBlock,
 	formatElapsed,
 } from "../callout";
+import { buildErrorCallout as buildErrorCalloutStreaming } from "../callout-streaming";
+import { INSTRUCTIONS_PREFIX, buildPromptInstructions } from "../instructions";
 
 describe("buildCalloutHeader", () => {
 	it("formats query as the callout title", () => {
@@ -75,10 +76,28 @@ describe("buildResponseCallout", () => {
 
 describe("buildErrorCallout", () => {
 	it("formats error with query as title", () => {
-		const result = buildErrorCallout("What is X?", "Connection refused");
+		const result = buildErrorCalloutStreaming("What is X?", "Connection refused");
 		expect(result).toBe(
 			"> [!claude] What is X?\n> ⚠️ Connection refused"
 		);
+	});
+});
+
+describe("buildPromptInstructions (D4)", () => {
+	it("includes INSTRUCTIONS_PREFIX", () => {
+		const instructions = buildPromptInstructions("/path/to/note.md", 5);
+		expect(instructions).includes("You are connected to an Obsidian vault.");
+	});
+
+	it("appends note path and cursor line", () => {
+		const instructions = buildPromptInstructions("/home/user/note.md", 10);
+		expect(instructions).includes("Note: `/home/user/note.md` (cursor line 10)");
+	});
+
+	it("keeps INSTRUCTIONS_PREFIX content (no follow-up questions, match tone)", () => {
+		const instructions = buildPromptInstructions("test.md", 0);
+		expect(instructions).includes("No follow-up questions.");
+		expect(instructions).includes("Match the tone.");
 	});
 });
 
