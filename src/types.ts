@@ -21,4 +21,6 @@ export interface InlinePiPluginLike {
 	app: App;
 	settings: InlinePiSettings;
 	saveSettings(): Promise<void>;
+	/** Event hooks for P4 callout/streaming (optional). */
+	hooks?: { onSettle?: (file: any, cursor: any, result: any) => void; onDelta?: (file: any, cursor: any, delta: string) => void };
 }

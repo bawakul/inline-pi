@@ -1,6 +1,7 @@
 import { Plugin, type EditorPosition, type TFile } from "obsidian";
 import { PiClient, type PiClientOptions, type PiSettleResult } from "./pi-client";
 import { InlinePiSuggest } from "./suggest";
+import { InlinePiCanvasSuggest } from "./canvas-trigger";
 import { InlinePiSettingTab } from "./settings";
 import type { InlinePiPluginLike, InlinePiSettings } from "./types";
 
@@ -23,10 +24,9 @@ export interface InlinePiEventHooks {
  * maintains a status bar indicator, and exposes hooks for P4 callout streaming.
  */
 export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike {
+	services: { piClient: PiClient | null; hooks: InlinePiEventHooks };
 	settings: InlinePiSettings;
-	private piClient: PiClient | null = null;
 	private statusBarEl: HTMLElement | null = null;
-	private hooks: InlinePiEventHooks = {};
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -34,8 +34,11 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		// Wire settings tab
 		this.addSettingTab(new InlinePiSettingTab(this.app, this));
 
-		// Register suggest (stubbed in P1, dispatch logic in P4)
+		// Register suggest (markdown notes)
 		this.registerEditorSuggest(new InlinePiSuggest(this));
+
+		// Register canvas suggest (canvas nodes)
+		this.registerEditorSuggest(new InlinePiCanvasSuggest(this));
 
 		// Create status bar item
 		this.statusBarEl = this.addStatusBarItem();
@@ -53,28 +56,28 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 			onExit: (code, signal) => this.onPiExit(code, signal),
 			onLog: (msg) => this.onPiLog(msg),
 		};
-		this.piClient = new PiClient(clientOptions);
+		this.services.piClient = new PiClient(clientOptions);
 
 		console.log("Inline Pi plugin loaded");
 	}
 
 	onunload(): void {
 		// Obsidian unload is sync; fire-and-forget shutdown with logged warning
-		void this.piClient?.shutdown().catch(() => {
+		void this.services.piClient?.shutdown().catch(() => {
 			console.warn("Inline Pi: shutdown did not complete before unload");
 		});
-		this.piClient = null;
+		this.services.piClient = null;
 		console.log("Inline Pi plugin unloaded");
 	}
 
 	/** Expose the shared PiClient for P4 integration. */
 	getPiClient(): PiClient | null {
-		return this.piClient;
+		return this.services.piClient;
 	}
 
 	/** Register P4 callout/streaming hooks. */
 	registerEventHooks(hooks: InlinePiEventHooks): void {
-		this.hooks = hooks;
+		this.services.hooks = hooks;
 	}
 
 	// --- PiClient event handlers ---
@@ -87,17 +90,17 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		// P4 will use this to stream text into the active callout
 		// For now, just log for visibility
 		console.log(`[pi-delta] ${id}: ${delta}`);
-		if (this.hooks.onDelta) {
+		if (this.services.hooks.onDelta) {
 			// P4 will infer the active callout from context; pass null here for now
-			this.hooks.onDelta(null, { line: 0, ch: 0 }, delta);
+			this.services.hooks.onDelta(null, { line: 0, ch: 0 }, delta);
 		}
 	}
 
 	private onPiSettle(id: string, result: PiSettleResult): void {
 		// P4 will use this to finalize the callout state
 		console.log(`[pi-settle] ${id}: aborted=${result.aborted}, error=${result.error}`);
-		if (this.hooks.onSettle) {
-			this.hooks.onSettle(null, { line: 0, ch: 0 }, result);
+		if (this.services.hooks.onSettle) {
+			this.services.hooks.onSettle(null, { line: 0, ch: 0 }, result);
 		}
 	}
 
