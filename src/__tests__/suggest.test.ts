@@ -61,14 +61,15 @@ describe("InlinePiSuggest selectSuggestion", () => {
 
 		const replaceRange = vi.fn();
 		const setCursor = vi.fn();
-		const editor = { replaceRange, setCursor } as unknown as Editor;
+		const getCursor = vi.fn(() => ({ line: 3, ch: 0 }));
+		const editor = { replaceRange, setCursor, getCursor } as unknown as Editor;
 
 		(suggest as any).context = {
 			editor,
 			start: { line: 3, ch: 5 },
 			end: { line: 3, ch: 12 },
 			query: "hello",
-			file: null as TFile | null,
+			file: { path: "test.md" } as unknown as TFile,
 		};
 
 		suggest.selectSuggestion("hello", {} as MouseEvent);
