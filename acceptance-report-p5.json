@@ -1,0 +1,50 @@
+{
+  "criteriaSatisfied": [
+    {
+      "id": "criterion-1",
+      "status": "satisfied",
+      "evidence": "P5 Canvas trigger implemented; all gates green (build/typecheck/test), 106 tests passing, commit dd643cf"
+    }
+  ],
+  "changedFiles": [
+    "src/canvas-trigger.ts",
+    "src/main.ts",
+    "src/types.ts",
+    "src/__tests__/canvas-trigger.test.ts",
+    "P6-HANDOFF.md"
+  ],
+  "testsAddedOrUpdated": [
+    "src/__tests__/canvas-trigger.test.ts"
+  ],
+  "commandsRun": [
+    {
+      "command": "npm run build",
+      "result": "passed",
+      "summary": "Build successful"
+    },
+    {
+      "command": "npm run typecheck",
+      "result": "passed",
+      "summary": "TypeCheck passed"
+    },
+    {
+      "command": "npm test",
+      "result": "passed",
+      "summary": "106 tests passed (7 test files)"
+    }
+  ],
+  "validationOutput": [
+    "1a53f92 P5 Canvas: ;; trigger on canvas nodes",
+    "dd643cf docs: add acceptance report for P5 Canvas"
+  ],
+  "residualRisks": [
+    "Throttle batching for undo may need adjustment if D5 signal fails (Obsidian undo implementation dependent)",
+    "OpenCode Go credits issue blocks real-pi testing; workaround: reset credits or swap to OpenRouter model"
+  ],
+  "noStagedFiles": false,
+  "diffSummary": "P5 Canvas implementation: new canvas-trigger.ts with findCanvasTrigger/prepareCanvasCallout/InlinePiCanvasSuggest, updated main.ts to register canvas suggest, updated types.ts with hooks property, added 9 new tests, added P6-HANDOFF.md manual checklist",
+  "reviewFindings": [
+    "blocker: none"
+  ],
+  "manualNotes": "P5 Canvas is complete. Canvas ;; trigger now works via InlinePiCanvasSuggest which uses registerEditorSuggest API. Canvas reuses callout-streaming.ts for throttled delta streaming (~150ms), pi-client.ts FIFO for queuing, abort-watcher.ts for header-presence monitoring. Commit dd643cf with Refs #1."
+}
