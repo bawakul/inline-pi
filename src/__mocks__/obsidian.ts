@@ -78,6 +78,10 @@ export class App {
 		//   plugin.app.workspace.getLeavesOfType = vi.fn(() => [<mock leaf>]);
 		getLeavesOfType: (_type: string): any[] => [],
 	};
+	commands: any = {
+		commands: {},
+		executeCommandById: vi.fn(async (id: string) => {}),
+	};
 }
 
 /**
