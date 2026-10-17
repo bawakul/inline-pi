@@ -106,6 +106,11 @@ function handlePrompt(msg: any) {
 		case "u2028":
 			runU2028(id);
 			break;
+		case "abort":
+			// For abort scenario: send started response and wait for abort message
+			send({ id, type: "response", data: { disposition: "started" } });
+			// activeId stays set until abort is received
+			break;
 		default:
 			runHappy(id);
 	}
