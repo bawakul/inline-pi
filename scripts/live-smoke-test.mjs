@@ -9,8 +9,13 @@
  * This test:
  * - Spawns real pi as a child process
  * - Sends a trivial prompt
- * - Verifies at least one text_delta or message_end arrives within ~30s
- * - Reports real failures (network, pi not found, etc.)
+ * - Verifies at least one text_delta event arrives (streaming works)
+ * - FAILS LOUDLY if pi's model errors (e.g. 429 rate limit)
+ * - Does NOT pass on empty settle events
+ * 
+ * NOTE: This test requires a working pi model. If it fails with 429 error,
+ *       it means the model service is unavailable - not a code issue.
+ *       Unit tests against fake-pi are the real P2 coverage.
  */
 
 import { spawn } from "child_process";
@@ -25,8 +30,8 @@ const WORKING_DIR = resolvePath(__dirname, "..");
 
 let hasTextDelta = false;
 let hasSettled = false;
-let hasMessageContent = false;
-let settleResult = null;
+let stopReason = undefined;
+let errorMessage = undefined;
 
 const child = spawn("pi", ["--mode", "rpc", "--no-session"], {
 	cwd: WORKING_DIR,
@@ -53,15 +58,19 @@ child.stdout.on("data", (chunk) => {
 				console.log(`[SMOKE] Text delta: ${msg.assistantMessageEvent.delta}`);
 			}
 			
-			if (msg.type === "message_end" && msg.message && typeof msg.message === "string" && msg.message.length > 0) {
-				hasMessageContent = true;
-				console.log(`[SMOKE] Message content (first 100 chars): ${msg.message.substring(0, 100)}...`);
+			// Check for error in message_end content (pi embeds error info in message)
+			if (msg.type === "message_end" && msg.message && msg.message.stopReason === "error") {
+				stopReason = "error";
+				errorMessage = msg.message.errorMessage;
+				console.error(`[SMOKE] Model error: ${errorMessage || "Unknown error"}`);
 			}
 			
 			if (msg.type === "agent_settled") {
 				hasSettled = true;
-				settleResult = msg;
-				console.log(`[SMOKE] Settled: ${JSON.stringify(msg)}`);
+				// Override with top-level fields if present
+				if (msg.stopReason) stopReason = msg.stopReason;
+				if (msg.errorMessage) errorMessage = msg.errorMessage;
+				console.log(`[SMOKE] Settled: stopReason=${stopReason}, aborted=${msg.aborted}`);
 			}
 		} catch (err) {
 			// Parse error - just log and continue
@@ -70,7 +79,7 @@ child.stdout.on("data", (chunk) => {
 });
 
 child.stderr.on("data", (chunk) => {
-	// Ignore stderr (just noise from pi)
+	// Ignore stderr (just pi's noise)
 });
 
 child.on("error", (err) => {
@@ -104,18 +113,42 @@ const checkComplete = () => {
 	if (hasSettled) {
 		clearTimeout(timeout);
 		child.kill("SIGTERM");
-		console.log("[SMOKE] SUCCESS: Smoke test completed");
-		console.log(`[SMOKE] - Text delta received: ${hasTextDelta}`);
-		console.log(`[SMOKE] - Message content received: ${hasMessageContent}`);
-		console.log(`[SMOKE] - Settled with stopReason: ${settleResult?.stopReason}`);
 		
-		// Check if we got some output (either text_delta or message_end with content)
-		if (hasTextDelta || hasMessageContent || settleResult) {
-			process.exit(0);
-		} else {
-			console.error("[SMOKE] FAILED: Missing expected events");
+		// Fail if model returned an error (429, etc.)
+		if (stopReason === "error") {
+			console.error("\n==========================================");
+			console.error("LIVE SMOKE TEST FAILED");
+			console.error("==========================================");
+			console.error("pi's default model returned an error.");
+			if (errorMessage) {
+				console.error(`Error message: ${errorMessage}`);
+			}
+			console.error("");
+			console.error("This is NOT a code bug - it's a model/service issue.");
+			console.error("Unit tests against fake-pi are the real P2 coverage.");
+			console.error("Re-run this when:");
+			console.error("- OpenCode Go credits reset, OR");
+			console.error("- pi's default model is switched to an OpenRouter model");
+			console.error("==========================================\n");
 			process.exit(1);
 		}
+		
+		// Require text_delta to verify streaming actually works
+		if (!hasTextDelta) {
+			console.error("\n==========================================");
+			console.error("LIVE SMOKE TEST FAILED");
+			console.error("==========================================");
+			console.error("Expected: at least one text_delta event");
+			console.error("Result: No text_delta received");
+			console.error("This suggests streaming is broken or the model returned no content.");
+			console.error("==========================================\n");
+			process.exit(1);
+		}
+		
+		console.log("[SMOKE] SUCCESS: Smoke test completed");
+		console.log(`[SMOKE] - Text delta received: ${hasTextDelta}`);
+		console.log(`[SMOKE] - Settled with stopReason: ${stopReason}`);
+		process.exit(0);
 	} else {
 		// Check again in 100ms
 		setTimeout(checkComplete, 100);
