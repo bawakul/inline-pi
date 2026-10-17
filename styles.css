@@ -1,0 +1,30 @@
+.callout[data-callout="claude-done"] {
+  --callout-color: 100, 180, 100;
+  --callout-icon: message-circle;
+}
+
+.callout[data-callout="claude"] {
+  --callout-color: 180, 180, 180;
+  --callout-icon: loader;
+}
+
+.callout[data-callout="claude"] .callout-icon .svg-icon {
+  animation: claude-spin 1.5s linear infinite;
+}
+
+@keyframes claude-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.inline-claude-instructions {
+  max-height: 300px;
+  overflow-y: auto;
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 12px;
+  font-size: var(--font-smallest);
+  white-space: pre-wrap;
+  margin-top: 8px;
+}
