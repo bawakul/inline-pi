@@ -76,6 +76,10 @@ const FALLBACK_PI_PATHS = [
 
 /** Cached result of the async PATH probe. */
 let cachedPiPath: string | undefined;
+// Cached login-shell PATH. Used for the spawn env so the pi launcher's
+// inner #!/usr/bin/env node script can find node (Obsidian launched from the
+// Dock does not inherit the shell PATH, so node would be missing -> ENOENT).
+let cachedShellPath: string | null | undefined;
 
 async function fileExists(p: string): Promise<boolean> {
 	try {
@@ -147,6 +151,7 @@ export async function resolvePiPath(): Promise<string> {
 	const candidates: string[] = [];
 
 	const shellPath = await resolveLoginShellPath();
+	cachedShellPath = shellPath;
 	if (shellPath) {
 		candidates.push(...findPiInPath(shellPath));
 	}
@@ -231,10 +236,14 @@ export class PiClient {
 		// glm-5.2 (and other reasoning models) otherwise emit long thinking_delta
 		// streams before any text_delta, so the callout appears frozen while it thinks.
 		const args = ["--mode", "rpc", "--no-session", "--thinking", "off"];
+		// Use the login-shell PATH (resolved once, cached) so the pi launcher's
+		// inner `#!/usr/bin/env node` script can find node. Obsidian launched from
+		// the Dock does not inherit the shell PATH — without this, spawning the
+		// launcher gives ENOENT on the inner node script.
 		const env = {
 			...process.env,
-			// Inherit the resolved PATH so the shim can find its managed node, etc.
-			PATH: process.env.PATH ?? "",
+			// Prepend the shell PATH so node (and any pi-managed node) wins over Obsidian's.
+			PATH: cachedShellPath ? `${cachedShellPath}:${process.env.PATH ?? ""}` : process.env.PATH ?? "",
 		};
 
 		this.log(`spawning: ${cmd} ${args.join(" ")} cwd=${this.opts.workingDirectory}`);
