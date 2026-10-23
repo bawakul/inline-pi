@@ -2,6 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { debugLog } from "./debug-log";
 
 /** Terminal classification delivered via onSettle. */
 export interface PiSettleResult {
@@ -58,6 +59,9 @@ interface PromptRequest {
 	stopReason?: string;
 	errorMessage?: string;
 	timeoutHandle?: NodeJS.Timeout;
+	// Per-prompt streaming handlers (optional, for callout routing)
+	onDelta?: (delta: string) => void;
+	onSettle?: (result: PiSettleResult) => void;
 }
 
 const DEFAULT_PI_TIMEOUT_MS = 300_000;
@@ -234,6 +238,7 @@ export class PiClient {
 		};
 
 		this.log(`spawning: ${cmd} ${args.join(" ")} cwd=${this.opts.workingDirectory}`);
+		debugLog(`spawn: ${cmd} ${args.join(" ")} cwd=${this.opts.workingDirectory}`);
 
 		return new Promise((resolve, reject) => {
 			let resolved = false;
@@ -248,6 +253,7 @@ export class PiClient {
 
 			proc.on("error", (err) => {
 				this.log(`spawn error: ${err.message}`);
+				debugLog(`spawn error: ${err.message} ENOENT=${(err as any).code === "ENOENT"}`);
 				this.setStatus("dead");
 				if (!resolved) {
 					resolved = true;
@@ -259,6 +265,7 @@ export class PiClient {
 
 			proc.on("exit", (code, signal) => {
 				this.log(`process exited code=${code} signal=${signal}`);
+				debugLog(`spawn exit: code=${code} signal=${signal}`);
 				this.process = null;
 				this.setStatus("dead");
 				this.failActiveAndQueued(new Error("pi process exited unexpectedly"));
@@ -325,6 +332,9 @@ export class PiClient {
 			return;
 		}
 
+		// Log event type for observability
+		debugLog(`event ${msg.type} id=${id ?? "none"} active=${this.active?.id ?? "none"}`);
+
 		switch (msg.type) {
 			case "message_update": {
 				const ev = msg.assistantMessageEvent;
@@ -332,6 +342,9 @@ export class PiClient {
 					if (this.active) {
 						this.active.buffer += ev.delta;
 						this.opts.onDelta(this.active.id, ev.delta);
+						const routed = !!this.active.onDelta;
+						if (routed) this.active.onDelta!(ev.delta);
+						debugLog(`routed delta to ${routed ? "per-prompt" : "opts.onDelta"} len=${ev.delta.length}`);
 					}
 				}
 				break;
@@ -461,7 +474,11 @@ export class PiClient {
 			clearTimeout(req.timeoutHandle);
 			req.timeoutHandle = undefined;
 		}
+		const status = result.aborted ? "aborted" : result.error ? "error" : "ok";
+		debugLog(`settle ${req.id} status=${status} error=${result.error} finalLen=${result.finalContent.length}`);
 		this.opts.onSettle(req.id, result);
+		// Also call per-prompt onSettle if present
+		req.onSettle?.(result);
 		this.dispatchNext();
 	}
 
@@ -471,12 +488,14 @@ export class PiClient {
 			this.active = null;
 			if (req.timeoutHandle) clearTimeout(req.timeoutHandle);
 			req.reject(err);
-			this.opts.onSettle(req.id, {
+			const failResult: PiSettleResult = {
 				finalContent: req.buffer,
 				aborted: false,
 				error: true,
 				errorMessage: err.message,
-			});
+			};
+			this.opts.onSettle(req.id, failResult);
+			req.onSettle?.(failResult);
 		}
 		while (this.queue.length > 0) {
 			const req = this.queue.shift()!;
@@ -508,14 +527,21 @@ export class PiClient {
 	 * Enqueue a prompt. Resolves once the prompt is accepted by pi
 	 * (disposition "started" or "handled"). Streaming deltas and the final
 	 * settlement arrive via onDelta / onSettle callbacks.
+	 *
+	 * @param message The prompt message
+	 * @param handlers Optional per-prompt handlers for streaming (onDelta, onSettle)
+	 * @returns The prompt id (resolves when accepted by pi, before streaming completes)
 	 */
-	async prompt(message: string): Promise<string> {
+	async prompt(message: string, handlers?: { onDelta?: (delta: string) => void; onSettle?: (result: PiSettleResult) => void }): Promise<string> {
 		const id = this.nextPromptId();
+		debugLog(`prompt ${id} queue: len=${message.length} cwd=${this.opts.workingDirectory}`);
 		return new Promise((resolveOuter, rejectOuter) => {
 			let settled = false;
 			const req: PromptRequest = {
 				id,
 				message,
+				onDelta: handlers?.onDelta,
+				onSettle: handlers?.onSettle,
 				resolve: () => {
 					if (settled) return;
 					settled = true;
@@ -554,6 +580,7 @@ export class PiClient {
 		if (this.opts.timeoutMs > 0) {
 			req.timeoutHandle = setTimeout(() => {
 				this.log(`prompt ${req.id} timed out after ${this.opts.timeoutMs}ms; aborting`);
+				debugLog(`timeout ${req.id} after ${this.opts.timeoutMs}ms`);
 				this.send({ type: "abort" });
 				this.settleActive({
 					finalContent: req.buffer,

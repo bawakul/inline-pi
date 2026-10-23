@@ -108,8 +108,11 @@ export function prepareCanvasCallout(
 	// Add node id to the message (appended to instructions)
 	const messageWithNodeId = `${payload}\nNode ID: ${nodeId}`;
 
-	// Enqueue the prompt with pi-client
-	void piClient.prompt(messageWithNodeId)
+	// Enqueue the prompt with pi-client, passing handle's streaming callbacks
+	void piClient.prompt(messageWithNodeId, {
+		onDelta: (delta: string) => handle.onDelta(delta),
+		onSettle: (result: any) => handle.onSettle(result),
+	})
 		.then((id: string) => {
 			console.log(`Inline Pi: canvas prompt ${id} accepted by pi`);
 		})

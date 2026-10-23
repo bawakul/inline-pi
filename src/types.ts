@@ -5,12 +5,18 @@ export interface InlinePiSettings {
 	/** Empty string means "use vault root". */
 	workingDirectory: string;
 	timeoutSecs: number;
+	/** Enable/disable file-based debug log. */
+	enableDebugLog: boolean;
+	/** Optional explicit pi executable; otherwise resolved from PATH. */
+	piCommand?: string;
 }
 
 export const DEFAULT_SETTINGS: InlinePiSettings = {
 	triggerPhrase: ";;",
 	workingDirectory: "",
 	timeoutSecs: 300,
+	enableDebugLog: true,
+	piCommand: undefined,
 };
 
 /**

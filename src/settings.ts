@@ -62,5 +62,17 @@ export class InlinePiSettingTab extends PluginSettingTab {
 						}
 					})
 			);
+
+		new Setting(containerEl)
+			.setName("Enable debug log")
+			.setDesc("Write detailed event logs to ~/.pi/inline-pi-debug.log for troubleshooting.")
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.enableDebugLog)
+					.onChange(async (value) => {
+						this.plugin.settings.enableDebugLog = value;
+						await this.plugin.saveSettings();
+					})
+			);
 	}
 }

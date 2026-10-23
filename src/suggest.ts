@@ -130,53 +130,17 @@ export class InlinePiSuggest extends EditorSuggest<string> {
 			start.line
 		);
 
-		// 4. Store the handle in activeCallouts for hook routing
-		const activeCallouts = (this.plugin as any).activeCallouts as Map<string, any>;
-		if (activeCallouts) {
-			const calloutHandle: any = {
-				id: promptId,
-				onDelta: (delta: string) => {
-					// Route delta to plugin's hook system
-				},
-				onSettle: (result: any) => {
-					// Route settle to plugin's hook system
-				},
-			};
-			activeCallouts.set(promptId, calloutHandle);
-		}
-
-		// 5. Save the file BEFORE sending prompt (load-bearing for pi-client reads)
-		// Command ID: editor:save-file (verified against Obsidian 1.1.0+ source)
-		const saveCommandId = "editor:save-file";
-		const app = this.plugin.app as any;
-		if (app.commands?.commands[saveCommandId]) {
-			void app.commands.executeCommandById(saveCommandId);
-		} else {
-			// Fallback: try alternative save command IDs
-			const alternativeCommands = [
-				"editor:save-file",
-				"file:save",
-				"workspace:save",
-			];
-			for (const cmdId of alternativeCommands) {
-				if (app.commands?.commands[cmdId]) {
-					void app.commands.executeCommandById(cmdId);
-					console.log(`Inline Pi: using alternative save command: ${cmdId}`);
-					break;
-				}
-			}
-		}
-
-		// 6. Build the prompt payload using Worker A's buildPromptInstructions
+		// 4. Build the prompt payload using Worker A's buildPromptInstructions
 		const cursorLine = editor.getCursor().line;
 		const payload = buildPromptInstructions(file.path, cursorLine);
 
-		// 7. Enqueue the prompt with pi-client
-		piClient.prompt(payload)
+		// 5. Enqueue the prompt with pi-client, passing handle's streaming callbacks
+		piClient.prompt(payload, {
+			onDelta: (delta: string) => handle.onDelta(delta),
+			onSettle: (result: any) => handle.onSettle(result),
+		})
 			.then((id: string) => {
 				console.log(`Inline Pi: prompt ${id} accepted by pi`);
-				// Prompt has been accepted (started or handled disposition)
-				// The streaming events will arrive via onDelta/onSettle callbacks
 			})
 			.catch((err: Error) => {
 				console.error(`Inline Pi: prompt failed: ${err.message}`);

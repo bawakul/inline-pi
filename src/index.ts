@@ -4,7 +4,6 @@ export type { InlinePiPluginLike, InlinePiSettings } from "./types";
 export { PiClient, type PiClientOptions, type PiSettleResult } from "./pi-client";
 export { InlinePiSuggest } from "./suggest";
 export { InlinePiSettingTab } from "./settings";
-export type { InlinePiEventHooks } from "./main";
 
 // Callout streaming
 export { insertPendingCallout, buildErrorCallout, type CalloutHandle, type CalloutState } from "./callout-streaming";

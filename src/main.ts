@@ -4,30 +4,17 @@ import { InlinePiSuggest } from "./suggest";
 import { InlinePiCanvasSuggest } from "./canvas-trigger";
 import { InlinePiSettingTab } from "./settings";
 import { DEFAULT_SETTINGS } from "./settings";
+import { debugLog } from "./debug-log";
 import type { InlinePiPluginLike, InlinePiSettings } from "./types";
-
-/**
- * Event hook surface for P4 callout/streaming hooks.
- * Each hook receives a reference to the active callout or plugin-level event.
- */
-export interface InlinePiEventHooks {
-	onDelta?: (file: TFile | null, cursor: EditorPosition, delta: string) => void;
-	onSettle?: (
-		file: TFile | null,
-		cursor: EditorPosition,
-		result: PiSettleResult
-	) => void;
-}
 
 /**
  * Main plugin class for P3+.
  * Manages a single shared PiClient instance (D1: shared process),
- * maintains a status bar indicator, and exposes hooks for P4 callout streaming.
+ * maintains a status bar indicator.
  */
 export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike {
-	services: { piClient: PiClient | null; hooks: InlinePiEventHooks } = {
+	services: { piClient: PiClient | null } = {
 		piClient: null,
-		hooks: {},
 	};
 	settings: InlinePiSettings = DEFAULT_SETTINGS;
 	private statusBarEl: HTMLElement | null = null;
@@ -60,6 +47,8 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 			onExit: (code, signal) => this.onPiExit(code, signal),
 			onLog: (msg) => this.onPiLog(msg),
 		};
+		debugLog(`onload cwd=${clientOptions.workingDirectory} pi=${this.settings.piCommand || "auto"}`);
+		debugLog(`onload enableDebugLog=${this.settings.enableDebugLog}`);
 		this.services.piClient = new PiClient(clientOptions);
 
 		console.log("Inline Pi plugin loaded");
@@ -83,57 +72,86 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		return this.services.piClient;
 	}
 
-	/** Register P4 callout/streaming hooks. */
-	registerEventHooks(hooks: InlinePiEventHooks): void {
-		this.services.hooks = hooks;
-	}
-
 	// --- PiClient event handlers ---
 
 	private onPiStatusChange(status: "dead" | "ready" | "busy", depth: number): void {
 		this.updateStatusBar(status, depth);
 	}
 
+	private byteCount = 0;
+
 	private onPiDelta(id: string, delta: string): void {
-		// P4 will use this to stream text into the active callout
-		// For now, just log for visibility
+		// Per-prompt handlers route directly; this callback (from PiClientOptions.onDelta)
+		// is kept for logging/debugging only. The event bridge is handled via per-prompt
+		// handlers passed to prompt() in suggest.ts and canvas-trigger.ts.
 		console.log(`[pi-delta] ${id}: ${delta}`);
-		if (this.services.hooks.onDelta) {
-			// P4 will infer the active callout from context; pass null here for now
-			this.services.hooks.onDelta(null, { line: 0, ch: 0 }, delta);
-		}
+		this.byteCount += delta.length;
+		this.updateStatusBar("busy", 0, this.humanizeByteCount(this.byteCount));
+	}
+
+	private humanizeByteCount(bytes: number): string {
+		if (bytes < 1000) return `${bytes}`;
+		return `${(bytes / 1000).toFixed(1)}k`;
 	}
 
 	private onPiSettle(id: string, result: PiSettleResult): void {
-		// P4 will use this to finalize the callout state
+		// Per-prompt handlers route directly; this callback (from PiClientOptions.onSettle)
+		// is kept for logging/debugging only. The event bridge is handled via per-prompt
+		// handlers passed to prompt() in suggest.ts and canvas-trigger.ts.
 		console.log(`[pi-settle] ${id}: aborted=${result.aborted}, error=${result.error}`);
-		if (this.services.hooks.onSettle) {
-			this.services.hooks.onSettle(null, { line: 0, ch: 0 }, result);
-		}
+		// Reset byte count and detail on settle
+		this.byteCount = 0;
+		this.updateStatusBar(result.error ? "dead" : "ready", 0);
 	}
 
 	private onPiExit(code: number | null, signal: string | null): void {
 		console.log(`[pi-exit] code=${code} signal=${signal}`);
-		// If the process died unexpectedly, update status
-		this.updateStatusBar("dead", 0);
+		// If the process died unexpectedly, update status with reason
+		let reason = "exited";
+		if (signal) reason = `signal=${signal}`;
+		else if (code !== null) reason = `code=${code}`;
+		this.updateStatusBar("dead", 0, reason);
 	}
 
 	private onPiLog(message: string): void {
 		console.log(`[pi-client] ${message}`);
+		debugLog(`[pi-client] ${message}`);
+
+		// Drive status bar detail from log messages
+		if (message.includes("thinking (")) {
+			// Thinking state
+			this.updateStatusBar("busy", 0, "thinking…");
+		} else if (message.includes("spawn error:")) {
+			// Error state
+			this.updateStatusBar("dead", 0, "spawn error");
+		}
 	}
 
 	// --- Status bar ---
 
-	private updateStatusBar(status: "dead" | "ready" | "busy", depth: number): void {
+	private statusBarState = {
+		status: "ready" as "dead" | "ready" | "busy",
+		depth: 0,
+		detail: "",
+	};
+
+	private updateStatusBar(status?: "dead" | "ready" | "busy", depth?: number, detail?: string): void {
 		if (!this.statusBarEl) return;
 
+		if (status !== undefined) this.statusBarState.status = status;
+		if (depth !== undefined) this.statusBarState.depth = depth;
+		if (detail !== undefined) this.statusBarState.detail = detail;
+
+		const { status: s, depth: d, detail: det } = this.statusBarState;
 		let icon = "⚫"; // dead
-		if (status === "ready") icon = "🟢";
-		else if (status === "busy") icon = "⏳";
+		if (s === "ready") icon = "🟢";
+		else if (s === "busy") icon = "⏳";
 
 		let text = `${icon} Inline Pi`;
-		if (depth > 0) {
-			text += ` (${depth} queued)`;
+		if (det) {
+			text += ` · ${det}`;
+		} else if (d > 0) {
+			text += ` (${d} queued)`;
 		}
 		this.statusBarEl.setText(text);
 	}
@@ -155,9 +173,15 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		if (!this.settings.workingDirectory.trim()) {
 			this.settings.workingDirectory = "";
 		}
+		import("./debug-log").then(({ setDebugLogEnabled }) => {
+			setDebugLogEnabled(this.settings.enableDebugLog);
+		});
 	}
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		import("./debug-log").then(({ setDebugLogEnabled }) => {
+			setDebugLogEnabled(this.settings.enableDebugLog);
+		});
 	}
 }
