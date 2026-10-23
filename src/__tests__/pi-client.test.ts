@@ -336,11 +336,21 @@ describe("PiClient", () => {
 			const logCalls: string[] = [];
 			const settles: PiSettleResult[] = [];
 
-			// Create client without fake spawn - use real spawn with nonexistent pi
+			// Inject a spawnCommand fake that emits an 'error' event (ENOENT),
+			// simulating a missing node binary. The client should settle with error.
+			const fakeSpawn = () => {
+				const ee = new (require("events").EventEmitter)() as any;
+				ee.stdin = { write: () => {}, end: () => {}, writable: true };
+				ee.stdout = null;
+				ee.stderr = null;
+				setImmediate(() => ee.emit("error", Object.assign(new Error("spawn node ENOENT"), { code: "ENOENT" })));
+				return ee;
+			};
+
 			const client = new PiClient({
 				workingDirectory: __dirname,
 				timeoutMs: 0,
-				piCommand: "/nonexistent/pi",
+				spawnCommand: fakeSpawn as any,
 				onLog: (msg: string) => logCalls.push(msg),
 				onSettle: (id: string, result: PiSettleResult) => {
 					settles.push(result);

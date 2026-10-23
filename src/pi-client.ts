@@ -74,6 +74,74 @@ const FALLBACK_PI_PATHS = [
 	path.join(os.homedir(), ".local", "bin", "pi"),
 ];
 
+// Node binary candidates. cli.js is an ESM bundle that needs Node >= 22
+// (it uses node:module enableCompileCache). Obsidian's own Electron node is
+// too old, so we resolve the SYSTEM node from the login-shell PATH or these
+// fallbacks. This follows pi's own RpcClient pattern: spawn `node` with
+// cli.js as the entry arg, NOT the ~/.local/bin/pi launcher shell script
+// (whose inner #!/usr/bin/env node fails with ENOENT when Obsidian's Dock-
+// launched env has no node on PATH).
+const NODE_BIN_FALLBACKS = [
+	"/opt/homebrew/opt/node@24/bin/node",
+	"/opt/homebrew/bin/node",
+	"/usr/local/bin/node",
+	path.join(os.homedir(), ".local", "share", "pi-node", "current", "bin", "node"),
+	path.join(os.homedir(), ".npm-global", "bin", "node"),
+	path.join(os.homedir(), ".bun", "bin", "node"),
+];
+
+// Cached resolved node binary path.
+let cachedNodePath: string | undefined;
+
+/** Find `node` on a PATH string (first match). */
+function findNodeInPath(pathEnv: string): string | null {
+	for (const dir of pathEnv.split(":")) {
+		const p = path.join(dir.trim(), "node");
+		try {
+			if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+		} catch {}
+	}
+	return null;
+}
+
+/** Resolve the system node binary (login-shell PATH first, then fallbacks). */
+async function resolveNodePath(): Promise<string> {
+	if (cachedNodePath !== undefined) return cachedNodePath;
+	const shellPath = await resolveLoginShellPath();
+	if (shellPath) {
+		const found = findNodeInPath(shellPath);
+		if (found) { cachedNodePath = found; return found; }
+	}
+	for (const c of NODE_BIN_FALLBACKS) {
+		try {
+			if (fs.existsSync(c)) { cachedNodePath = c; return c; }
+		} catch {}
+	}
+	cachedNodePath = "node"; // last resort: let PATH resolve at spawn (env has fallbacks)
+	return cachedNodePath;
+}
+
+/** Resolve the pi cli.js entry from the pi-managed install (matches the pi
+ * launcher's own resolution: read ~/.pi/agent/install/current-version, then
+ * releases/<version>/node_modules/@earendil-works/pi-coding-agent/dist/bundle/cli.js).
+ * Returns null if not found. */
+function resolvePiCliJs(): string | null {
+	const agentDir = path.join(os.homedir(), ".pi", "agent");
+	const versionFile = path.join(agentDir, "install", "current-version");
+	try {
+		const version = fs.readFileSync(versionFile, "utf8").trim();
+		if (!version) return null;
+		const cli = path.join(
+			agentDir, "install", "releases", version,
+			"node_modules", "@earendil-works", "pi-coding-agent",
+			"dist", "bundle", "cli.js",
+		);
+		return fs.existsSync(cli) ? cli : null;
+	} catch {
+		return null;
+	}
+}
+
 /** Cached result of the async PATH probe. */
 let cachedPiPath: string | undefined;
 // Cached login-shell PATH. Used for the spawn env so the pi launcher's
@@ -231,18 +299,21 @@ export class PiClient {
 			this.piPath = this.opts.piCommand ?? (await resolvePiPath());
 		}
 
-		const cmd = this.piPath;
+		// Spawn pi the way pi's own RpcClient does: `node <cli.js> --mode rpc ...`.
+		// We do NOT spawn the ~/.local/bin/pi launcher shell script: its inner
+		// #!/usr/bin/env node fails with ENOENT when Obsidian's Dock-launched env
+		// has no node on PATH. Spawning node + cli.js directly sidesteps that.
+		// cli.js is ESM needing Node >= 22, so resolveNodePath finds the system node.
+		const cliJs = resolvePiCliJs();
+		const nodeBin = await resolveNodePath();
+		const cmd = nodeBin;
 		// --thinking off: ;; note Q&A is fast inline exchange, not extended reasoning.
 		// glm-5.2 (and other reasoning models) otherwise emit long thinking_delta
 		// streams before any text_delta, so the callout appears frozen while it thinks.
-		const args = ["--mode", "rpc", "--no-session", "--thinking", "off"];
-		// Use the login-shell PATH (resolved once, cached) so the pi launcher's
-		// inner `#!/usr/bin/env node` script can find node. Obsidian launched from
-		// the Dock does not inherit the shell PATH — without this, spawning the
-		// launcher gives ENOENT on the inner node script.
+		const args = [cliJs ? cliJs : "dist/cli.js", "--mode", "rpc", "--no-session", "--thinking", "off"];
 		const env = {
 			...process.env,
-			// Prepend the shell PATH so node (and any pi-managed node) wins over Obsidian's.
+			// Keep a node-bearing PATH in case cli.js spawns children that need node.
 			PATH: cachedShellPath ? `${cachedShellPath}:${process.env.PATH ?? ""}` : process.env.PATH ?? "",
 		};
 
@@ -250,6 +321,10 @@ export class PiClient {
 		debugLog(`spawn: ${cmd} ${args.join(" ")} cwd=${this.opts.workingDirectory}`);
 
 		return new Promise((resolve, reject) => {
+			if (!cliJs) {
+				reject(new Error("Could not find pi cli.js in ~/.pi/agent/install"));
+				return;
+			}
 			let resolved = false;
 			const proc = this.opts.spawnCommand(cmd, args, {
 				cwd: this.opts.workingDirectory,
