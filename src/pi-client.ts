@@ -223,7 +223,10 @@ export class PiClient {
 		}
 
 		const cmd = this.piPath;
-		const args = ["--mode", "rpc", "--no-session"];
+		// --thinking off: ;; note Q&A is fast inline exchange, not extended reasoning.
+		// glm-5.2 (and other reasoning models) otherwise emit long thinking_delta
+		// streams before any text_delta, so the callout appears frozen while it thinks.
+		const args = ["--mode", "rpc", "--no-session", "--thinking", "off"];
 		const env = {
 			...process.env,
 			// Inherit the resolved PATH so the shim can find its managed node, etc.
@@ -359,6 +362,14 @@ export class PiClient {
 			}
 			case "extension_ui_request": {
 				this.handleExtensionUiRequest(msg);
+				break;
+			}
+			// thinking_* events are liveness signals — the model is reasoning before text.
+			// We don't render thinking content (the callout shows text_delta only), but surface
+			// it via onLog so the plugin could show a "thinking…" state instead of a dead spin.
+			case "thinking_start":
+			case "thinking_delta": {
+				if (this.active) this.opts.onLog(`thinking (${msg.assistantMessageEvent?.type})`);
 				break;
 			}
 			case "queue_update":

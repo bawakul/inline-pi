@@ -3,6 +3,7 @@ import { PiClient, type PiClientOptions, type PiSettleResult } from "./pi-client
 import { InlinePiSuggest } from "./suggest";
 import { InlinePiCanvasSuggest } from "./canvas-trigger";
 import { InlinePiSettingTab } from "./settings";
+import { DEFAULT_SETTINGS } from "./settings";
 import type { InlinePiPluginLike, InlinePiSettings } from "./types";
 
 /**
@@ -24,8 +25,11 @@ export interface InlinePiEventHooks {
  * maintains a status bar indicator, and exposes hooks for P4 callout streaming.
  */
 export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike {
-	services: { piClient: PiClient | null; hooks: InlinePiEventHooks };
-	settings: InlinePiSettings;
+	services: { piClient: PiClient | null; hooks: InlinePiEventHooks } = {
+		piClient: null,
+		hooks: {},
+	};
+	settings: InlinePiSettings = DEFAULT_SETTINGS;
 	private statusBarEl: HTMLElement | null = null;
 
 	async onload(): Promise<void> {
@@ -62,11 +66,15 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 	}
 
 	onunload(): void {
-		// Obsidian unload is sync; fire-and-forget shutdown with logged warning
-		void this.services.piClient?.shutdown().catch(() => {
-			console.warn("Inline Pi: shutdown did not complete before unload");
-		});
-		this.services.piClient = null;
+		// Obsidian unload is sync; fire-and-forget shutdown with logged warning.
+		// Guard against onload having thrown before services were populated.
+		const client = this.services?.piClient;
+		if (client) {
+			void client.shutdown().catch(() => {
+				console.warn("Inline Pi: shutdown did not complete before unload");
+			});
+			this.services.piClient = null;
+		}
 		console.log("Inline Pi plugin unloaded");
 	}
 
