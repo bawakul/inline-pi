@@ -1,5 +1,6 @@
 import { Plugin, type EditorPosition, type TFile } from "obsidian";
 import { PiClient, type PiClientOptions, type PiSettleResult } from "./pi-client";
+import { AbortWatcher } from "./abort-watcher";
 import { InlinePiSuggest } from "./suggest";
 import { InlinePiCanvasSuggest } from "./canvas-trigger";
 import { InlinePiSettingTab } from "./settings";
@@ -13,8 +14,9 @@ import type { InlinePiPluginLike, InlinePiSettings } from "./types";
  * maintains a status bar indicator.
  */
 export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike {
-	services: { piClient: PiClient | null } = {
+	services: { piClient: PiClient | null; abortWatcher: AbortWatcher | null } = {
 		piClient: null,
+		abortWatcher: null,
 	};
 	settings: InlinePiSettings = DEFAULT_SETTINGS;
 	private statusBarEl: HTMLElement | null = null;
@@ -51,6 +53,10 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		debugLog(`onload enableDebugLog=${this.settings.enableDebugLog}`);
 		this.services.piClient = new PiClient(clientOptions);
 
+		// Initialize the abort-on-edit watcher (constructed after piClient exists).
+		this.services.abortWatcher = new AbortWatcher(this.services.piClient);
+		debugLog(`onload abortWatcher initialized`);
+
 		console.log("Inline Pi plugin loaded");
 	}
 
@@ -58,6 +64,7 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		// Obsidian unload is sync; fire-and-forget shutdown with logged warning.
 		// Guard against onload having thrown before services were populated.
 		const client = this.services?.piClient;
+		this.services?.abortWatcher?.stopAll();
 		if (client) {
 			void client.shutdown().catch(() => {
 				console.warn("Inline Pi: shutdown did not complete before unload");
@@ -70,6 +77,11 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 	/** Expose the shared PiClient for P4 integration. */
 	getPiClient(): PiClient | null {
 		return this.services.piClient;
+	}
+
+	/** Expose the shared AbortWatcher so suggest/canvas can register pending callouts. */
+	getAbortWatcher(): AbortWatcher | null {
+		return this.services.abortWatcher;
 	}
 
 	// --- PiClient event handlers ---
