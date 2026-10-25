@@ -2,6 +2,8 @@
 
 Running log of hard-won debugging lessons from the inline-pi Obsidian plugin. Each entry: what happened, the real cause, the fix, and what to remember.
 
+> Architecture-direction decisions (which way and why) live in [`decisions/`](./decisions/) as ADRs. This file is for debugging root-causes — "what bit us, the real cause, the fix."
+
 ---
 
 ## 2026-10-25 · The P6 "spawn wall" was a malformed cwd, not an architecture wall
