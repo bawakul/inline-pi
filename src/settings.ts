@@ -44,6 +44,9 @@ export class InlinePiSettingTab extends PluginSettingTab {
 					.onChange(async (value) => {
 						this.plugin.settings.workingDirectory = value.trim();
 						await this.plugin.saveSettings();
+						// Push live to the running PiClient so the change takes effect on the
+						// next ;; without a plugin reload (issue #4).
+						this.plugin.setPiWorkingDirectory?.(value.trim());
 					})
 			);
 

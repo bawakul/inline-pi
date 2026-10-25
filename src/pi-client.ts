@@ -268,6 +268,21 @@ export class PiClient {
 		} as Required<PiClientOptions>;
 	}
 
+	/**
+	 * Update the working directory used for the *next* spawn. Does NOT restart a
+	 * running pi process — the current process keeps its cwd; the next respawn
+	 * (after exit or shutdown) uses the new value. Lets the settings tab push a
+	 * live change without a full plugin reload (issue #4).
+	 */
+	setWorkingDirectory(dir: string): void {
+		const effective = dir && dir.length > 0 ? dir : "";
+		if (effective !== this.opts.workingDirectory) {
+			this.log(`setWorkingDirectory: ${this.opts.workingDirectory || "(vault root)"} -> ${effective || "(vault root)"}`);
+			debugLog(`setWorkingDirectory: ${this.opts.workingDirectory || "(vault root)"} -> ${effective || "(vault root)"}`);
+			this.opts.workingDirectory = effective;
+		}
+	}
+
 	private log(msg: string): void {
 		this.opts.onLog(`[pi-client] ${msg}`);
 	}

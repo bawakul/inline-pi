@@ -170,6 +170,17 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 
 	// --- Settings ---
 
+	/**
+	 * Push a settings working-directory change to the running PiClient so it takes
+	 * effect on the next ;; without a full plugin reload. Resolves the vault
+	 * root when the setting is blank. See issue #4 and PiClient.setWorkingDirectory.
+	 */
+	setPiWorkingDirectory(dir: string): void {
+		const effective = dir.trim() || this.getVaultPath();
+		this.services.piClient?.setWorkingDirectory(effective);
+		debugLog(`setPiWorkingDirectory: ${effective || "(vault root)"}`);
+	}
+
 	private getVaultPath(): string {
 		const adapter = this.app.vault.adapter;
 		// getBasePath() exists for local vaults; return empty for cloud vaults
