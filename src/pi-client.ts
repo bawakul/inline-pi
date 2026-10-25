@@ -317,8 +317,27 @@ export class PiClient {
 			PATH: cachedShellPath ? `${cachedShellPath}:${process.env.PATH ?? ""}` : process.env.PATH ?? "",
 		};
 
-		this.log(`spawning: ${cmd} ${args.join(" ")} cwd=${this.opts.workingDirectory}`);
-		debugLog(`spawn: ${cmd} ${args.join(" ")} cwd=${this.opts.workingDirectory}`);
+		// Validate cwd exists BEFORE spawning. Node's `spawn` reports a non-existent
+		// cwd as ENOENT *on the binary*, not on the directory — a famous footgun that
+		// spent six commits chasing PATH/node resolution before the real cause (a
+		// shell-escaped working-directory string like "Bawa\\'s\\ Lab") was found.
+		// Surface a clear, accurate error instead of the misleading spawn ENOENT.
+		const cwd = this.opts.workingDirectory && this.opts.workingDirectory.length > 0
+			? this.opts.workingDirectory
+			: process.cwd();
+		if (!fs.existsSync(cwd)) {
+			const err = new Error(
+				`Inline Pi working directory does not exist: "${cwd}". ` +
+					`Check the "Pi working directory" setting (vault root is used when blank).`,
+			);
+			this.log(`spawn error (cwd missing): ${err.message}`);
+			debugLog(`spawn error (cwd missing): ${cwd} ENOENT-as-directory`);
+			this.setStatus("dead");
+			throw err;
+		}
+
+		this.log(`spawning: ${cmd} ${args.join(" ")} cwd=${cwd}`);
+		debugLog(`spawn: ${cmd} ${args.join(" ")} cwd=${cwd}`);
 
 		return new Promise((resolve, reject) => {
 			if (!cliJs) {
@@ -327,7 +346,7 @@ export class PiClient {
 			}
 			let resolved = false;
 			const proc = this.opts.spawnCommand(cmd, args, {
-				cwd: this.opts.workingDirectory,
+				cwd,
 				env,
 				windowsHide: true,
 				stdio: ["pipe", "pipe", "pipe"],
