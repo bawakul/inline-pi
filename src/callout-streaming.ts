@@ -1,4 +1,4 @@
-import type { Editor, EditorPosition, TFile } from "obsidian";
+import type { Editor, TFile } from "obsidian";
 import type { PiSettleResult } from "./pi-client";
 import {
 	buildCalloutHeader,
@@ -6,14 +6,28 @@ import {
 	findCalloutBlock,
 } from "./callout";
 
-// --- Streaming state types ---
+// --- Callout state types ---
 
-export type CalloutState = "pending" | "queued" | "streaming" | "green" | "error" | "aborted";
+/**
+ * Callout lifecycle states.
+ *
+ * T42 (2026-10-25): the callout no longer streams token-by-token. It holds a
+ * static pending header (`> [!claude] {query}`) until the run settles, then is
+ * replaced in one shot with the final content. Live activity (thinking, tool
+ * calls, byte count) is shown in the status bar instead — see main.ts
+ * `onActivity`. The `streaming` state is gone; `onDelta` is a no-op kept on the
+ * handle only so the suggest/canvas layers don't have to know about the change.
+ */
+export type CalloutState = "pending" | "queued" | "green" | "error" | "aborted";
 
 export interface CalloutHandle {
 	/** Unique identifier for correlation with pi-client. */
 	id: string;
-	/** Feed a text delta to the callout. */
+	/**
+	 * No-op since T42. The callout no longer streams; the final content is
+	 * rendered on `onSettle`. Kept on the handle so callers don't have to
+	 * branch on a streaming-vs-not contract.
+	 */
 	onDelta(delta: string): void;
 	/** Finalize with a settle result (aborted/error/green). */
 	onSettle(result: PiSettleResult): void;
@@ -21,40 +35,6 @@ export interface CalloutHandle {
 	onQueued(): void;
 	/** Abort the underlying run (sends abort to pi-client). */
 	abort(): void;
-}
-
-// --- Throttled delta accumulator ---
-
-class DeltaAccumulator {
-	private buffer = "";
-	private timer: NodeJS.Timeout | null = null;
-	private readonly throttleMs = 150;
-	private callback: (text: string) => void;
-
-	constructor(callback: (text: string) => void) {
-		this.callback = callback;
-	}
-
-	private flush(): void {
-		if (this.buffer.length === 0) return;
-		this.callback(this.buffer);
-		this.buffer = "";
-		if (this.timer) {
-			clearTimeout(this.timer);
-			this.timer = null;
-		}
-	}
-
-	public add(delta: string): void {
-		if (this.timer) clearTimeout(this.timer);
-		this.buffer += delta;
-		// Throttle: flush after delay if no more deltas arrive
-		this.timer = setTimeout(() => this.flush(), this.throttleMs);
-	}
-
-	public flushNow(): void {
-		this.flush();
-	}
 }
 
 // --- Callout instance class ---
@@ -68,7 +48,6 @@ class CalloutInstance {
 	private onSettleHandler: (result: PiSettleResult) => void = () => {};
 	private abortHandler: () => void = () => {};
 	private state: CalloutState = "pending";
-	private deltaAccumulator: DeltaAccumulator | null = null;
 	private pendingAbort = false;
 
 	constructor(
@@ -101,34 +80,19 @@ class CalloutInstance {
 		// In queued state, keep the pending callout visible.
 	}
 
-	public onDelta(delta: string): void {
-		if (this.state === "green" || this.state === "error" || this.state === "aborted") {
-			return;
-		}
-
-		// Transition from pending/queued to streaming on first delta
-		if (this.state === "pending" || this.state === "queued") {
-			this.state = "streaming";
-			// Create delta accumulator with throttled writes
-			this.deltaAccumulator = new DeltaAccumulator((text) => {
-				// Append text to the callout body (after the header line)
-				this.appendBodyText(text);
-			});
-		}
-
-		if (this.deltaAccumulator) {
-			this.deltaAccumulator.add(delta);
-		}
+	/**
+	 * No-op since T42. The callout holds its pending header until settle; the
+	 * status bar (main.ts `onActivity`) shows live progress instead. Deltas are
+	 * still consumed by pi-client for byte-count telemetry.
+	 */
+	public onDelta(_delta: string): void {
+		// Intentionally empty — see T42 re-scope notes.
 	}
 
 	public onSettle(result: PiSettleResult): void {
-		// Ensure any buffered deltas are flushed
-		if (this.deltaAccumulator) {
-			this.deltaAccumulator.flushNow();
-			this.deltaAccumulator = null;
-		}
-
-		// Update state and content
+		// Update state and content. The whole callout is replaced in one shot
+		// with the authoritative message_end content — no buffered streaming
+		// to flush.
 		if (result.aborted) {
 			this.state = "aborted";
 			this.replaceWithCallout(buildErrorCallout(this.query, "Aborted"));
@@ -156,38 +120,6 @@ class CalloutInstance {
 		this.onSettleHandler(result);
 	}
 
-	private appendBodyText(text: string): void {
-		const currentCallout = findCalloutBlock(this.editor, this.query, this.startLine);
-		if (!currentCallout) return;
-
-		// Read current content and append text to the last body line
-		const lines: string[] = [];
-		for (let i = currentCallout.from; i <= currentCallout.to; i++) {
-			lines.push(this.editor.getLine(i));
-		}
-
-		// Find the last line that starts with "> " (body line)
-		const bodyPrefix = "> ";
-		let lastBodyLineIdx = -1;
-		for (let i = lines.length - 1; i >= 0; i--) {
-			if (lines[i].startsWith(bodyPrefix)) {
-				lastBodyLineIdx = i;
-				break;
-			}
-		}
-
-		if (lastBodyLineIdx === -1) {
-			// No body line found, add one
-			lines.push(bodyPrefix + text);
-		} else {
-			// Append to the last body line
-			lines[lastBodyLineIdx] = lines[lastBodyLineIdx] + text;
-		}
-
-		const newContent = lines.join("\n") + "\n";
-		replaceCalloutBlock(this.editor, currentCallout.from, currentCallout.to, newContent);
-	}
-
 	private replaceWithCallout(newContent: string): void {
 		const currentCallout = findCalloutBlock(this.editor, this.query, this.startLine);
 		if (!currentCallout) return;
@@ -198,12 +130,6 @@ class CalloutInstance {
 	public abort(): void {
 		if (this.pendingAbort) return;
 		this.pendingAbort = true;
-
-		// If streaming, flush any pending deltas first
-		if (this.deltaAccumulator) {
-			this.deltaAccumulator.flushNow();
-			this.deltaAccumulator = null;
-		}
 
 		// Update UI to aborted state immediately
 		this.state = "aborted";
@@ -230,9 +156,13 @@ export function buildErrorCallout(query: string, errorMsg: string): string {
 }
 
 /**
- * Insert a pending callout and return a handle for streaming events.
- * The callout header is inserted; body will be populated via streaming deltas.
- * On settle, the body is replaced with the authoritative final content.
+ * Insert a pending callout and return a handle for settle/abort events.
+ *
+ * The callout header is inserted and held as a static "working" placeholder
+ * (T42). The body is NOT populated by streaming deltas; instead, the final
+ * answer is rendered in one shot when the run settles via `onSettle`. Live
+ * progress (thinking / tool calls / byte count) is shown in the status bar
+ * by main.ts via the pi-client `onActivity` callback.
  *
  * The caller MUST call `handle.wireSettle()` and `handle.wireAbort()` after
  * construction to connect the callbacks from main.ts hooks.

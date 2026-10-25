@@ -9,6 +9,8 @@
  *   "dialog"  -> extension_ui_request confirm, then text delta + settle
  *   "handled" -> disposition:handled (no stream, no agent_settled)
  *   "u2028"   -> text_delta containing U+2028 inside the JSON string
+ *   "tools"   -> turn_start + tool_execution_start/end (read, bash) +
+ *                message_update text + agent_settled (exercises issue #6)
  */
 function send(obj) {
     process.stdout.write(JSON.stringify(obj) + "\n");
@@ -25,6 +27,8 @@ function readScenario(message) {
         return "abort";
     if (m.includes("dialog"))
         return "dialog";
+    if (m.includes("tools"))
+        return "tools";
     if (m.includes("u2028") || m.includes("\u2028"))
         return "u2028";
     return "happy";
@@ -75,6 +79,21 @@ function runDialog(id) {
         activeId = null;
     }, 10);
 }
+function runTools(id) {
+    send({ id, type: "response", data: { disposition: "started" } });
+    send({ id, type: "agent_start" });
+    send({ id, type: "turn_start" });
+    send({ id, type: "tool_execution_start", toolCallId: "call-1", toolName: "read", args: { path: "foo.txt" } });
+    send({ id, type: "tool_execution_update", toolCallId: "call-1", toolName: "read", args: {}, partialResult: "" });
+    send({ id, type: "tool_execution_end", toolCallId: "call-1", toolName: "read", result: "", isError: false, durationMs: 5 });
+    send({ id, type: "tool_execution_start", toolCallId: "call-2", toolName: "bash", args: { command: "ls" } });
+    send({ id, type: "tool_execution_end", toolCallId: "call-2", toolName: "bash", result: "", isError: false, durationMs: 3 });
+    send({ id, type: "turn_end", message: {}, toolResults: [] });
+    send({ id, type: "message_update", assistantMessageEvent: { type: "text_delta", delta: "Done." } });
+    send({ id, type: "message_end", message: "Done." });
+    send({ id, type: "agent_settled", stopReason: "stop" });
+    activeId = null;
+}
 function runU2028(id) {
     send({ id, type: "response", data: { disposition: "started" } });
     send({
@@ -100,6 +119,9 @@ function handlePrompt(msg) {
             break;
         case "dialog":
             runDialog(id);
+            break;
+        case "tools":
+            runTools(id);
             break;
         case "u2028":
             runU2028(id);

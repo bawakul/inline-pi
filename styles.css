@@ -17,6 +17,27 @@
   to { transform: rotate(360deg); }
 }
 
+/* Visible "done" treatment — theme-independent.
+   The base --callout-color above is a subtle tint that some themes render
+   faintly (Typewriter) or strip entirely (Dawn sets --callout-border-width:0
+   and --callout-content-background:transparent). These explicit rules give
+   [!claude-done] an obvious green fill + left accent stripe so the "done,
+   green, collapsible" state reads without a CSS snippet installed alongside
+   the plugin. The fill goes on the container so the whole callout (title +
+   body) reads green, not just the title bar. Scoped to our custom callout type
+   only — no theme targets [data-callout="claude-done"], so this won't fight a
+   theme's own callout styling. */
+.callout[data-callout="claude-done"] {
+  border-left: 3px solid rgba(100, 180, 100, 0.6);
+  background-color: rgba(100, 180, 100, 0.15);
+}
+
+.callout[data-callout="claude-done"] .callout-content {
+  /* Let the container's green fill show through (Dawn already sets this to
+     transparent; Typewriter may not, so set it explicitly). */
+  background-color: transparent;
+}
+
 .inline-claude-instructions {
   max-height: 300px;
   overflow-y: auto;

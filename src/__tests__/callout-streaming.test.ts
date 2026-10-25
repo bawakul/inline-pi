@@ -93,56 +93,32 @@ describe("insertPendingCallout", () => {
 	});
 });
 
-// --- Tests for CalloutInstance streaming state machine ---
+// --- Tests for CalloutInstance state machine (T42: no streaming) ---
 
-describe("CalloutInstance streaming", () => {
-	it("transitions pending → streaming on first delta", () => {
-		const editor = makeEditorWithLines([
-			"> [!claude] Test query",
-			"",
-			"",
-		]);
+describe("CalloutInstance (no-streaming)", () => {
+	it("onDelta is a no-op: the callout stays pending until settle", () => {
+		const replaceRange = vi.fn();
+		const editor = {
+			getLine: (n: number) => ["> [!claude] Test query", "", ""][n] ?? "",
+			lineCount: () => 3,
+			replaceRange,
+			getCursor: () => ({ line: 0, ch: 0 }),
+			setCursor: vi.fn(),
+		} as any;
 		const file = makeTFile();
 		const handle = insertPendingCallout(editor, file, "Test query");
 
 		(handle as any).wireSettle(() => {});
 		(handle as any).wireAbort(() => {});
 
-		// Initial state is pending
-		expect((handle as any).id).toBeDefined();
+		// The initial insert is the only replaceRange call (the pending header).
+		expect(replaceRange).toHaveBeenCalledOnce();
 
-		// First delta transitions to streaming and starts accumulator
+		// Deltas must NOT touch the editor — the callout holds its pending header
+		// until settle. Live activity is shown in the status bar instead (T42).
 		handle.onDelta("Hello");
-		// Delta is buffered; check if it would be appended (we can't easily inspect internal state)
-		// But we can verify the callout text is not replaced yet (throttled)
-	});
-
-	it("accumulates deltas and flushes after throttle delay", async () => {
-		vi.useFakeTimers();
-		try {
-			const editor = makeEditorWithLines([
-				"> [!claude] Throttle test",
-				"",
-				"",
-			]);
-			const file = makeTFile();
-			const handle = insertPendingCallout(editor, file, "Throttle test");
-
-			(handle as any).wireSettle(() => {});
-			(handle as any).wireAbort(() => {});
-
-			// Feed multiple deltas quickly
-			handle.onDelta("Hello");
-			handle.onDelta(" world");
-
-			// Advance timers to trigger flush
-			vi.advanceTimersByTime(200);
-
-			// Delta accumulator should flush the combined text "Hello world"
-			// The actual editor.appendBodyText would be called with "Hello world"
-		} finally {
-			vi.useRealTimers();
-		}
+		handle.onDelta(" world");
+		expect(replaceRange).toHaveBeenCalledOnce();
 	});
 
 	it("handles queued state", () => {

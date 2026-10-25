@@ -20,6 +20,18 @@ export interface PiSettleResult {
 
 export type PiStatus = "dead" | "ready" | "busy";
 
+/** Coarse phase of the active run, for status-bar display. */
+export type PiActivityPhase = "thinking" | "tool" | "responding" | "idle";
+
+/** Activity signal derived from tool/turn/agent events (issue #6). */
+export interface PiActivity {
+	phase: PiActivityPhase;
+	/** Tool name when phase === "tool". */
+	toolName?: string;
+	/** Number of tool calls so far in the active run. */
+	toolCount?: number;
+}
+
 export interface PiClientOptions {
 	/** Directory used as pi's cwd. */
 	workingDirectory: string;
@@ -36,6 +48,8 @@ export interface PiClientOptions {
 	onStatusChange?: (status: PiStatus, queuedDepth: number) => void;
 	/** Streaming text delta for the currently active prompt id. */
 	onDelta?: (id: string, delta: string) => void;
+	/** Activity signal (thinking/tool) for the active run — issue #6. */
+	onActivity?: (activity: PiActivity) => void;
 	/** Terminal result for a prompt id. */
 	onSettle?: (id: string, result: PiSettleResult) => void;
 	/** Unexpected child exit (or after shutdown). */
@@ -62,6 +76,8 @@ interface PromptRequest {
 	// Per-prompt streaming handlers (optional, for callout routing)
 	onDelta?: (delta: string) => void;
 	onSettle?: (result: PiSettleResult) => void;
+	// Tool-call count for this run (activity telemetry, issue #6)
+	toolCount: number;
 }
 
 const DEFAULT_PI_TIMEOUT_MS = 300_000;
@@ -262,6 +278,7 @@ export class PiClient {
 			spawnCommand: opts.spawnCommand ?? spawn,
 			onStatusChange: opts.onStatusChange ?? (() => {}),
 			onDelta: opts.onDelta ?? (() => {}),
+			onActivity: opts.onActivity ?? (() => {}),
 			onSettle: opts.onSettle ?? (() => {}),
 			onExit: opts.onExit ?? (() => {}),
 			onLog: opts.onLog ?? (() => {}),
@@ -291,6 +308,12 @@ export class PiClient {
 		if (this.status === status) return;
 		this.status = status;
 		this.opts.onStatusChange(status, this.queue.length);
+	}
+
+	/** Emit an activity signal for the active run (issue #6). No-op when no run is active. */
+	private activity(phase: PiActivityPhase, toolName?: string): void {
+		if (!this.active) return;
+		this.opts.onActivity({ phase, toolName, toolCount: this.active.toolCount });
 	}
 
 	private nextPromptId(): string {
@@ -445,7 +468,15 @@ export class PiClient {
 			return;
 		}
 
-		if (id && this.active && id !== this.active.id) {
+		// Only message_update / message_end carry the prompt id. Gate those by id
+		// so a late delta from an already-settled prompt doesn't corrupt the active
+		// one. Tool/turn/agent/extension events are session-scoped (no prompt id, or
+		// their own UUID) and attach to the active prompt regardless of id — issue
+		// #6. This also lets extension_ui_request (which carries its own UUID) reach
+		// its handler instead of being dropped as "stale".
+		const promptScoped =
+			msg.type === "message_update" || msg.type === "message_end";
+		if (promptScoped && id && this.active && id !== this.active.id) {
 			this.log(`ignoring event for stale id ${id}; active=${this.active.id}`);
 			return;
 		}
@@ -476,6 +507,42 @@ export class PiClient {
 				}
 				break;
 			}
+			// --- Activity events (issue #6): drive the status bar via onActivity. ---
+			// agent_start / turn_start -> thinking. tool_execution_* -> tool (with
+			// toolName + running toolCount). message_start / turn_end don't change
+			// the phase: message_start fires for tool-result messages too, and
+			// message_update text_delta is the reliable "responding" signal (the
+			// byte-count detail is set by main.ts's onDelta handler).
+			case "agent_start":
+			case "turn_start": {
+				this.activity("thinking");
+				break;
+			}
+			case "turn_end": {
+				debugLog(`turn_end (toolResults=${msg.toolResults?.length ?? 0})`);
+				// No phase change — the next turn_start / agent_settled drives the bar.
+				break;
+			}
+			case "message_start": {
+				// Fires for both assistant and tool-result messages; don't change phase.
+				break;
+			}
+			case "tool_execution_start": {
+				if (this.active) this.active.toolCount++;
+				this.activity("tool", msg.toolName);
+				debugLog(`tool_start ${msg.toolName} count=${this.active?.toolCount}`);
+				break;
+			}
+			case "tool_execution_update": {
+				// Liveness only; keep current tool phase + toolName.
+				if (this.active) this.activity("tool", msg.toolName);
+				break;
+			}
+			case "tool_execution_end": {
+				if (this.active) this.activity("tool", msg.toolName);
+				debugLog(`tool_end ${msg.toolName} isError=${msg.isError}`);
+				break;
+			}
 			case "agent_settled": {
 				this.handleAgentSettled(msg);
 				break;
@@ -496,11 +563,15 @@ export class PiClient {
 				break;
 			}
 			// thinking_* events are liveness signals — the model is reasoning before text.
-			// We don't render thinking content (the callout shows text_delta only), but surface
-			// it via onLog so the plugin could show a "thinking…" state instead of a dead spin.
+			// We don't render thinking content (T42: the callout holds its pending header
+			// until settle), but surface them via onLog + onActivity(thinking) so the
+			// status bar shows "thinking…" instead of a dead spin.
 			case "thinking_start":
 			case "thinking_delta": {
-				if (this.active) this.opts.onLog(`thinking (${msg.assistantMessageEvent?.type})`);
+				if (this.active) {
+					this.opts.onLog(`thinking (${msg.assistantMessageEvent?.type})`);
+					this.activity("thinking");
+				}
 				break;
 			}
 			case "queue_update":
@@ -671,6 +742,7 @@ export class PiClient {
 					rejectOuter(err);
 				},
 				buffer: "",
+			toolCount: 0,
 			};
 			this.queue.push(req);
 			this.dispatchNext();

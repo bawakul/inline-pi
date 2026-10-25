@@ -134,9 +134,10 @@ export class InlinePiSuggest extends EditorSuggest<string> {
 		const cursorLine = editor.getCursor().line;
 		const payload = buildPromptInstructions(file.path, cursorLine);
 
-		// 5. Enqueue the prompt with pi-client, passing handle's streaming callbacks
+		// 5. Enqueue the prompt with pi-client. T42: no onDelta — the callout holds
+		// its pending header until settle; live activity goes to the status bar via
+		// the plugin-level onActivity callback wired in main.ts.
 		piClient.prompt(payload, {
-			onDelta: (delta: string) => handle.onDelta(delta),
 			onSettle: (result: any) => handle.onSettle(result),
 		})
 			.then((id: string) => {

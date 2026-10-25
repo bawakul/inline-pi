@@ -1,5 +1,5 @@
 import { Plugin, type EditorPosition, type TFile } from "obsidian";
-import { PiClient, type PiClientOptions, type PiSettleResult } from "./pi-client";
+import { PiClient, type PiClientOptions, type PiSettleResult, type PiActivity } from "./pi-client";
 import { AbortWatcher } from "./abort-watcher";
 import { InlinePiSuggest } from "./suggest";
 import { InlinePiCanvasSuggest } from "./canvas-trigger";
@@ -45,6 +45,7 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 			timeoutMs: this.settings.timeoutSecs * 1000,
 			onStatusChange: (status, depth) => this.onPiStatusChange(status, depth),
 			onDelta: (id, delta) => this.onPiDelta(id, delta),
+			onActivity: (activity) => this.onPiActivity(activity),
 			onSettle: (id, result) => this.onPiSettle(id, result),
 			onExit: (code, signal) => this.onPiExit(code, signal),
 			onLog: (msg) => this.onPiLog(msg),
@@ -91,6 +92,18 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 	}
 
 	private byteCount = 0;
+
+	/** Activity signal (thinking/tool) drives the status-bar detail — issue #6. */
+	private onPiActivity(activity: PiActivity): void {
+		if (activity.phase === "thinking") {
+			this.updateStatusBar("busy", 0, "thinking…");
+		} else if (activity.phase === "tool") {
+			const name = activity.toolName ?? "tool";
+			const n = activity.toolCount ?? 0;
+			this.updateStatusBar("busy", 0, n > 1 ? `${name} ×${n}` : name);
+		}
+		// "responding" is driven by onDelta's byte-count detail; "idle" by onSettle.
+	}
 
 	private onPiDelta(id: string, delta: string): void {
 		// Per-prompt handlers route directly; this callback (from PiClientOptions.onDelta)

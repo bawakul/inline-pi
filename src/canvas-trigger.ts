@@ -108,9 +108,10 @@ export function prepareCanvasCallout(
 	// Add node id to the message (appended to instructions)
 	const messageWithNodeId = `${payload}\nNode ID: ${nodeId}`;
 
-	// Enqueue the prompt with pi-client, passing handle's streaming callbacks
+	// Enqueue the prompt with pi-client. T42: no onDelta — the callout holds its
+	// pending header until settle; live activity goes to the status bar via the
+	// plugin-level onActivity callback wired in main.ts.
 	void piClient.prompt(messageWithNodeId, {
-		onDelta: (delta: string) => handle.onDelta(delta),
 		onSettle: (result: any) => handle.onSettle(result),
 	})
 		.then((id: string) => {

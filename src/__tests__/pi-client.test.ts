@@ -6,6 +6,7 @@ import {
 	PiSettleResult,
 	PiStatus,
 	SpawnCommand,
+	PiActivity,
 } from "../pi-client";
 
 describe("PiClient", () => {
@@ -101,6 +102,7 @@ describe("PiClient", () => {
 			spawnCommand: fakeSpawnCommand,
 			onSettle,
 			onDelta: userOptions.onDelta || (() => {}),
+			onActivity: userOptions.onActivity || (() => {}),
 			onLog: userOptions.onLog || (() => {}),
 			onStatusChange: userOptions.onStatusChange || (() => {}),
 			onExit: userOptions.onExit || (() => {}),
@@ -108,6 +110,47 @@ describe("PiClient", () => {
 
 		return { client, settleResults, awaitSettle };
 	}
+
+	describe("Activity events (issue #6)", () => {
+		it("routes tool/turn/agent events to onActivity and counts tools", async () => {
+			const activities: PiActivity[] = [];
+			const { client, awaitSettle } = createClientWithSettleTracking({
+				onActivity: (a: PiActivity) => activities.push(a),
+			});
+
+			const promptId = await client.prompt("run tools please");
+			const result = await awaitSettle(promptId);
+
+			expect(result.error).toBe(false);
+
+			// Phase progression: thinking -> tool(read) -> tool(bash) -> responding.
+			const phases = activities.map((a) => a.phase);
+			expect(phases).toContain("thinking");
+			expect(phases).toContain("tool");
+
+			// First tool event carries toolName + toolCount 1; second carries 2.
+			const toolEvents = activities.filter((a) => a.phase === "tool");
+			expect(toolEvents.length).toBeGreaterThanOrEqual(2);
+			expect(toolEvents[0].toolName).toBe("read");
+			expect(toolEvents[0].toolCount).toBe(1);
+			// The tool_execution_start for bash increments the running count.
+			const bashStart = toolEvents.find((a) => a.toolName === "bash");
+			expect(bashStart?.toolCount).toBe(2);
+		});
+
+		it("does not log tool/turn/agent events as 'unknown event type'", async () => {
+			const logCalls: string[] = [];
+			const { client, awaitSettle } = createClientWithSettleTracking({
+				onLog: (msg: string) => logCalls.push(msg),
+			});
+
+			const promptId = await client.prompt("run tools please");
+			await awaitSettle(promptId);
+
+			const unknownLogs = logCalls.filter((l) => l.includes("unknown event type"));
+			expect(unknownLogs).toEqual([]);
+		});
+	});
 
 	describe("Happy path", () => {
 		it("streams text deltas and settles with success", async () => {
