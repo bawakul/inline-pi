@@ -147,6 +147,10 @@ export class Editor {
 	getLine(_line: number): string {
 		return "";
 	}
+	/** Tests that need specific content override with vi.fn(() => "some text"). */
+	getValue(): string {
+		return "";
+	}
 	lineCount(): number {
 		return 0;
 	}

@@ -130,9 +130,14 @@ export class InlinePiSuggest extends EditorSuggest<string> {
 			start.line
 		);
 
-		// 4. Build the prompt payload using Worker A's buildPromptInstructions
+		// 4. Build the prompt payload using Worker A's buildPromptInstructions.
+		// #10: include the note text at trigger time so the model doesn't have
+		// to read the file (and so prior callouts can be stripped before they
+		// reach the model).
 		const cursorLine = editor.getCursor().line;
-		const payload = buildPromptInstructions(file.path, cursorLine);
+		const noteText = editor.getValue();
+		// #10: pass the user's question so the payload actually contains it.
+		const payload = buildPromptInstructions(file.path, cursorLine, noteText, value);
 
 		// 5. Enqueue the prompt with pi-client. T42: no onDelta — the callout holds
 		// its pending header until settle; live activity goes to the status bar via

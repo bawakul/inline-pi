@@ -11,6 +11,8 @@
  *   "u2028"   -> text_delta containing U+2028 inside the JSON string
  *   "tools"   -> turn_start + tool_execution_start/end (read, bash) +
  *                message_update text + agent_settled (exercises issue #6)
+ *   "multi-turn" -> two full turns (message_start/update/end each) to verify
+ *                   the message_start buffer reset (issue #8)
  */
 function send(obj) {
     process.stdout.write(JSON.stringify(obj) + "\n");
@@ -29,6 +31,8 @@ function readScenario(message) {
         return "dialog";
     if (m.includes("tools"))
         return "tools";
+    if (m.includes("multi-turn"))
+        return "multiTurn";
     if (m.includes("u2028") || m.includes("\u2028"))
         return "u2028";
     return "happy";
@@ -94,6 +98,42 @@ function runTools(id) {
     send({ id, type: "agent_settled", stopReason: "stop" });
     activeId = null;
 }
+function runMultiTurn(id) {
+    send({ id, type: "response", data: { disposition: "started" } });
+    send({ id, type: "agent_start" });
+    // Turn 1
+    send({ id, type: "turn_start" });
+    send({ id, type: "message_start" });
+    send({
+        id,
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Turn 1 " },
+    });
+    send({
+        id,
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "text" },
+    });
+    send({ id, type: "message_end", message: "Turn 1 text" });
+    send({ id, type: "turn_end", message: {}, toolResults: [] });
+    // Turn 2
+    send({ id, type: "turn_start" });
+    send({ id, type: "message_start" });
+    send({
+        id,
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "Turn 2 " },
+    });
+    send({
+        id,
+        type: "message_update",
+        assistantMessageEvent: { type: "text_delta", delta: "final" },
+    });
+    send({ id, type: "message_end", message: "Turn 2 final" });
+    send({ id, type: "turn_end", message: {}, toolResults: [] });
+    send({ id, type: "agent_settled", stopReason: "stop" });
+    activeId = null;
+}
 function runU2028(id) {
     send({ id, type: "response", data: { disposition: "started" } });
     send({
@@ -122,6 +162,9 @@ function handlePrompt(msg) {
             break;
         case "tools":
             runTools(id);
+            break;
+        case "multiTurn":
+            runMultiTurn(id);
             break;
         case "u2028":
             runU2028(id);

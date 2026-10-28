@@ -525,6 +525,12 @@ export class PiClient {
 			}
 			case "message_start": {
 				// Fires for both assistant and tool-result messages; don't change phase.
+				// Reset buffer so each turn's text_delta starts fresh (issue #8).
+				// Without this, deltas from turn N+1 append to turn N's message_end
+				// content, mashing multi-turn responses.
+				if (this.active) {
+					this.active.buffer = "";
+				}
 				break;
 			}
 			case "tool_execution_start": {

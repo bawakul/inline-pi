@@ -282,6 +282,25 @@ describe("PiClient", () => {
 		});
 	});
 
+	describe("Multi-turn buffer reset (issue #8 regression guard)", () => {
+		it("settles with only the LAST turn's content (no turn-N mashing)", async () => {
+			const { client, awaitSettle } = createClientWithSettleTracking();
+
+			// The "multi-turn" prompt triggers fake-pi's multiTurn scenario:
+			// turn 1 ("Turn 1 text") followed by turn 2 ("Turn 2 final"),
+			// each with message_start / text deltas / message_end.
+			const promptId = await client.prompt("run multi-turn please");
+			const result = await awaitSettle(promptId);
+
+			expect(result.error).toBe(false);
+			expect(result.aborted).toBe(false);
+			// Without the message_start buffer reset, turn 2's text_delta
+			// accumulates onto turn 1's message_end content, yielding
+			// "Turn 1 textTurn 2 final". Final content must be the last turn only.
+			expect(result.finalContent).toBe("Turn 2 final");
+		});
+	});
+
 	describe("FIFO queue", () => {
 		it("processes prompts in order and reports queued depth", async () => {
 			const statusChanges: { status: PiStatus; depth: number }[] = [];

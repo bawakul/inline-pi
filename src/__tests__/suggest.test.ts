@@ -62,7 +62,8 @@ describe("InlinePiSuggest selectSuggestion", () => {
 		const replaceRange = vi.fn();
 		const setCursor = vi.fn();
 		const getCursor = vi.fn(() => ({ line: 3, ch: 0 }));
-		const editor = { replaceRange, setCursor, getCursor } as unknown as Editor;
+		const getValue = vi.fn(() => "Some note text here.");
+		const editor = { replaceRange, setCursor, getCursor, getValue } as unknown as Editor;
 
 		(suggest as any).context = {
 			editor,
@@ -81,5 +82,54 @@ describe("InlinePiSuggest selectSuggestion", () => {
 			{ line: 3, ch: 12 }
 		);
 		expect(setCursor).toHaveBeenCalledWith({ line: 5, ch: 0 });
+	});
+
+	it("includes the user's question in the message passed to piClient.prompt (#10 regression)", () => {
+		const app = new App();
+		// Fake pi client — the prompt call's message is what #10 was missing.
+		const piClient = {
+			prompt: vi.fn().mockResolvedValue("prompt-1"),
+			abort: vi.fn().mockResolvedValue(undefined),
+		};
+		const abortWatcher = { registerPendingCallout: vi.fn() };
+		const plugin = {
+			app,
+			settings: { ...DEFAULT_SETTINGS },
+			getPiClient: () => piClient,
+			getAbortWatcher: () => abortWatcher,
+		};
+		const suggest = new InlinePiSuggest(plugin as any);
+
+		const replaceRange = vi.fn();
+		const setCursor = vi.fn();
+		const getCursor = vi.fn(() => ({ line: 3, ch: 0 }));
+		const getLine = vi.fn(() => ";; weather report for Berlin");
+		const getValue = vi.fn(() => "Some note text here.");
+		const editor = {
+			replaceRange,
+			setCursor,
+			getCursor,
+			getLine,
+			getValue,
+		} as unknown as Editor;
+
+		(suggest as any).context = {
+			editor,
+			start: { line: 3, ch: 5 },
+			end: { line: 3, ch: 34 },
+			query: "weather report for Berlin",
+			file: { path: "test.md" } as unknown as TFile,
+		};
+
+		suggest.selectSuggestion("weather report for Berlin", {} as MouseEvent);
+
+		// The callout is inserted and the prompt is enqueued...
+		expect(replaceRange).toHaveBeenCalled();
+		expect(piClient.prompt).toHaveBeenCalledOnce();
+		// ...and the payload actually contains the user's question —
+		// this is the assertion that would have caught #10.
+		const message = (piClient.prompt as any).mock.calls[0][0];
+		expect(message).toContain("weather report for Berlin");
+		expect(message).toContain("## Question");
 	});
 });

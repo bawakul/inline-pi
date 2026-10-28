@@ -43,6 +43,21 @@ tmp/
 # Build artifacts
 main.js
 
+# Architecture review scratch (T56) — local-only rendering artifacts.
+# The source of truth is docs/architecture.md (Mermaid + trace) and the
+# .archify/ HTML; the excalidraw/png/pdf/script files below are detritus
+# from the rendering pivots and stay local.
+.archify/
+docs/*.excalidraw
+docs/*.mmd
+docs/*.png
+docs/*.print.html
+docs/*.print.pdf
+docs/_print.css
+scripts/_*
+scripts/build-arch-scene.mjs
+scripts/mermaid-to-excalidraw.mjs
+
 # Obsidian vault folders (not part of plugin source)
 _Portfolio/
 _Templates/

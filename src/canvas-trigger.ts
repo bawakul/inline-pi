@@ -103,8 +103,11 @@ export function prepareCanvasCallout(
 		void app.commands.executeCommandById(saveCommandId);
 	}
 
-	// Build the prompt payload with node id and file path
-	const payload = buildPromptInstructions(filePath, cursor.line);
+	// Build the prompt payload with node id and file path. #10: include the
+	// node editor's text at trigger time (same Editor API as markdown).
+	const noteText = editor.getValue();
+	// #10: pass the user's question so the payload actually contains it.
+	const payload = buildPromptInstructions(filePath, cursor.line, noteText, query);
 	// Add node id to the message (appended to instructions)
 	const messageWithNodeId = `${payload}\nNode ID: ${nodeId}`;
 

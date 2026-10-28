@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { findCanvasTrigger, prepareCanvasCallout } from "../canvas-trigger";
+import { Editor } from "obsidian";
 
 /**
  * Mock helper for testing canvas trigger detection.
@@ -95,5 +96,56 @@ describe("prepareCanvasCallout", () => {
 		expect(result).not.toBeNull();
 		expect(result?.triggerIndex).toBe(13);
 		expect(result?.query).toBe(" q2");
+	});
+
+	it("includes the user's question in the message passed to piClient.prompt (#10 regression, canvas path)", () => {
+		// Mirror of the markdown-path #10 regression in suggest.test.ts — the
+		// canvas trigger had the same bug (query reached the callout, not pi).
+		const editor = {
+			// cursor at end of the 28-char line so findCanvasTrigger captures
+			// the full query (ch is one past the last char, not on it).
+			getCursor: vi.fn(() => ({ line: 0, ch: 28 })),
+			getLine: vi.fn(() => ";; weather report for Berlin"),
+			getValue: vi.fn(() => "Some note text here."),
+			replaceRange: vi.fn(),
+			setCursor: vi.fn(),
+		} as unknown as Editor;
+
+		const nodes = new Map<string, any>();
+		nodes.set("node-1", { id: "node-1", child: { editor } });
+
+		const piClient = {
+			prompt: vi.fn().mockResolvedValue("prompt-1"),
+			abort: vi.fn().mockResolvedValue(undefined),
+		};
+
+		const plugin = {
+			app: {
+				workspace: {
+					getLeavesOfType: vi.fn((type: string) =>
+						type === "canvas"
+							? [{ view: { canvas: { nodes }, file: { path: "test.canvas" } } }]
+							: [],
+					),
+				},
+				commands: {
+					commands: { "editor:save-file": true },
+					executeCommandById: vi.fn(),
+				},
+			},
+			settings: { triggerPhrase: ";;" },
+			getPiClient: vi.fn(() => piClient),
+		} as any;
+
+		const result = prepareCanvasCallout(plugin, "test.canvas", editor);
+
+		expect(result).not.toBeNull();
+		expect(piClient.prompt).toHaveBeenCalledOnce();
+		const message = (piClient.prompt as any).mock.calls[0][0];
+		// #10: the question actually reaches pi (canvas path).
+		expect(message).toContain("weather report for Berlin");
+		expect(message).toContain("## Question");
+		// Canvas path appends the node id to the payload.
+		expect(message).toContain("Node ID: node-1");
 	});
 });
