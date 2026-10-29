@@ -228,7 +228,7 @@ describe("buildPromptInstructions", () => {
 	it("includes INSTRUCTIONS_PREFIX", () => {
 		const instructions = buildPromptInstructions("/path/to/note.md", 5, noteText);
 		expect(instructions).toContain(INSTRUCTIONS_PREFIX);
-		expect(instructions).toContain("You are connected to an Obsidian vault.");
+		expect(instructions).toContain("You are connected to an Obsidian vault");
 	});
 
 	it("includes the note path and cursor line", () => {
@@ -248,13 +248,14 @@ describe("buildPromptInstructions", () => {
 		expect(instructions).not.toContain("Read the file first");
 	});
 
-	it("replaces 'You have full filesystem access' with the softened note-context line", () => {
+	it("states the real toolset and defaults to answer-from-context (#12)", () => {
 		const instructions = buildPromptInstructions("test.md", 0, noteText);
 		expect(instructions).not.toContain("You have full filesystem access");
-		expect(instructions).toContain("The note you're in is included as context below");
-		expect(instructions).toContain(
-			"You can still read other files in the vault if the user's question asks for it."
-		);
+		expect(instructions).not.toContain("Read the file first");
+		expect(instructions).toContain("The note you're in is included below");
+		expect(instructions).toContain("web search");
+		expect(instructions).toContain("shell");
+		expect(instructions).toContain("Answer from the context in front of you.");
 	});
 
 	it("keeps the other instructions (no follow-up questions, match tone, start with text)", () => {
