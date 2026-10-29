@@ -239,7 +239,7 @@ describe("CalloutInstance (no-streaming)", () => {
 		expect(settleCallback).toHaveBeenCalledOnce();
 		// After settle, callout should be replaced with green callout
 		// The replaceWithCallout would be called with:
-		// "> [!claude-done]+ Green test\n> **Claude:** This is the final answer."
+		// "> [!claude-done]+ Green test\n> **Pi:** This is the final answer."
 	});
 
 	it("handles green settle result with empty content", () => {
@@ -266,7 +266,7 @@ describe("CalloutInstance (no-streaming)", () => {
 
 		expect(settleCallback).toHaveBeenCalledOnce();
 		// After settle, callout should be:
-		// "> [!claude-done]+ Empty test\n> **Claude:** "
+		// "> [!claude-done]+ Empty test\n> **Pi:** "
 	});
 });
 

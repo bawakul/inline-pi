@@ -161,7 +161,7 @@ export function findCanvasNodeIdForEditor(
 		for (const node of view.canvas.nodes.values()) {
 			if (!probeLogged) {
 				console.log(
-					`Inline Claude: first canvas trigger — node.child keys = ${JSON.stringify(
+					`Inline Pi: first canvas trigger — node.child keys = ${JSON.stringify(
 						Object.keys(node.child ?? {}),
 					)}`,
 				);

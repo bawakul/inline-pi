@@ -105,13 +105,13 @@ class CalloutInstance {
 			// Final content replace with the authoritative message_end content
 			const body = result.finalContent ?? "";
 			if (body === "") {
-				// Empty response: header + "**Claude:** " on second line (collapsible)
-				this.replaceWithCallout(`> [!claude-done]+ ${this.query}\n> **Claude:** `);
+				// Empty response: header + "**Pi:** " on second line (collapsible)
+				this.replaceWithCallout(`> [!claude-done]+ ${this.query}\n> **Pi:** `);
 			} else {
 				// Build proper response callout with final content
 				const responseLines = body
 					.split("\n")
-					.map((line, i) => (i === 0 ? `> **Claude:** ${line}` : `> ${line}`))
+					.map((line, i) => (i === 0 ? `> **Pi:** ${line}` : `> ${line}`))
 					.join("\n");
 				this.replaceWithCallout(`> [!claude-done]+ ${this.query}\n${responseLines}`);
 			}

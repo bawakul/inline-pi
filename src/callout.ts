@@ -21,17 +21,17 @@ export function insertCallout(
 }
 
 /**
- * Build a response callout with the original query and Claude's response.
+ * Build a response callout with the original query and pi's response.
  * The `+` makes it collapsible in Obsidian.
  */
 export function buildResponseCallout(query: string, response: string): string {
 	const header = `> [!claude-done]+ ${query}`;
 	if (response === "") {
-		return `${header}\n> **Claude:** `;
+		return `${header}\n> **Pi:** `;
 	}
 	const responseLines = response
 		.split("\n")
-		.map((line, i) => i === 0 ? `> **Claude:** ${line}` : `> ${line}`)
+		.map((line, i) => i === 0 ? `> **Pi:** ${line}` : `> ${line}`)
 		.join("\n");
 	return `${header}\n${responseLines}`;
 }

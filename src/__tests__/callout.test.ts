@@ -56,20 +56,20 @@ describe("buildResponseCallout", () => {
 	it("formats single-line response", () => {
 		const result = buildResponseCallout("What is X?", "X is a thing.");
 		expect(result).toBe(
-			"> [!claude-done]+ What is X?\n> **Claude:** X is a thing."
+			"> [!claude-done]+ What is X?\n> **Pi:** X is a thing."
 		);
 	});
 
 	it("formats multi-line response", () => {
 		const result = buildResponseCallout("Tell me", "Line 1\nLine 2\nLine 3");
 		expect(result).toBe(
-			"> [!claude-done]+ Tell me\n> **Claude:** Line 1\n> Line 2\n> Line 3"
+			"> [!claude-done]+ Tell me\n> **Pi:** Line 1\n> Line 2\n> Line 3"
 		);
 	});
 
 	it("handles empty response", () => {
 		const result = buildResponseCallout("Hello?", "");
-		expect(result).toBe("> [!claude-done]+ Hello?\n> **Claude:** ");
+		expect(result).toBe("> [!claude-done]+ Hello?\n> **Pi:** ");
 	});
 });
 
@@ -165,7 +165,7 @@ describe("findCalloutBlock", () => {
 	it("finds correct callout when multiple exist", () => {
 		const lines = [
 			"> [!claude-done]+ What is gravity?",
-			"> **Claude:** It's a force",
+			"> **Pi:** It's a force",
 			"",
 			"> [!claude] What is entropy?",
 			"> pending",
