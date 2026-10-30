@@ -61,3 +61,9 @@ scripts/mermaid-to-excalidraw.mjs
 # Obsidian vault folders (not part of plugin source)
 _Portfolio/
 _Templates/
+
+# Local build-phase working artifacts — kept on disk for reference, not part
+# of the shared repo (handoff doc, P5 acceptance checklist + machine report).
+P6-HANDOFF.md
+acceptance-p5.md
+acceptance-report-p5.json
