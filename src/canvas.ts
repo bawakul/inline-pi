@@ -32,6 +32,26 @@ interface CanvasViewMin extends View {
 	canvas?: CanvasMin;
 	file?: TFile;
 }
+/** Minimal leaf shape — canvas.ts only ever reads `view`. */
+interface CanvasLeafMin {
+	view: unknown;
+}
+
+/**
+ * A canvas node editor resolved to the leaf / file that owns it. #18: canvas
+ * node editors get no `TFile` from Obsidian's EditorSuggestContext, so the
+ * owning `.canvas` file has to be recovered from the leaf itself.
+ */
+export interface CanvasEditorLocation {
+	/** The canvas leaf whose node editor is the given editor. */
+	leaf: CanvasLeafMin;
+	/** The probed canvas view backing that leaf. */
+	view: CanvasViewMin;
+	/** Path of the `.canvas` file backing the leaf ("" when the view has no file). */
+	filePath: string;
+	/** ID of the canvas node whose editor is the given editor. */
+	nodeId: string;
+}
 
 export type ProbeResult =
 	| { ok: true; canvas: CanvasMin }
@@ -135,48 +155,97 @@ export function probeCanvasApi(view: unknown): ProbeResult {
 }
 
 /**
- * Trigger-time node identification (D-01).
+ * Node-level probe inside a single canvas view (D-01).
  *
- * Iterates every canvas leaf for filePath, then each node in view.canvas.nodes,
- * comparing node.child.editor === editor. Falls back to DOM containment
+ * Compares node.child.editor === editor, falling back to DOM containment
  * (node.contentEl.contains(editor.cm.contentDOM)) when node.child.editor is
- * undefined — this is the path RESEARCH Pitfall 2 calls out, and it has a
- * dedicated test (per checker warning #3).
- *
- * Returns the matched node id, or null if no match (D-03 — caller logs warn).
+ * undefined — the path RESEARCH Pitfall 2 calls out, with a dedicated test
+ * (per checker warning #3).
  *
  * Forensic: on first call per plugin load, logs Object.keys(node.child) so we
  * can validate the assumed shape against the real Obsidian runtime.
+ */
+function findCanvasNodeIdInView(
+	view: CanvasViewMin,
+	editor: Editor,
+	editorDom: HTMLElement | undefined,
+): string | null {
+	if (!view.canvas) return null;
+	for (const node of view.canvas.nodes.values()) {
+		if (!probeLogged) {
+			console.log(
+				`Inline Pi: first canvas trigger — node.child keys = ${JSON.stringify(
+					Object.keys(node.child ?? {}),
+				)}`,
+			);
+			probeLogged = true;
+		}
+		// Primary: editor-identity match.
+		if (node.child?.editor && node.child.editor === editor) return node.id;
+		// Fallback: DOM-containment match when child.editor is undefined
+		// (per RESEARCH Pitfall 2; tested explicitly per checker #3).
+		if (editorDom && node.contentEl?.contains(editorDom as unknown as Node)) {
+			return node.id;
+		}
+	}
+	return null;
+}
+
+/**
+ * Resolve the canvas leaf / `.canvas` path / node id that owns `editor`.
+ *
+ * This is the ONE detection routine shared by the markdown suggest (which
+ * must decline the `;;` keystroke on canvas) and the canvas suggest (which
+ * needs the owning `.canvas` path because Obsidian passes no `TFile` for
+ * canvas node editors — #18).
+ *
+ * Cheap by construction: `onTrigger` runs on every cursor move, so we bail
+ * before touching any nodes when no canvas leaves are open.
+ *
+ * `filePath` narrows the search to one canvas (the historical
+ * findCanvasNodeIdForEditor contract); omit it to match any open canvas.
+ */
+export function findCanvasLeafForEditor(
+	app: App,
+	editor: Editor,
+	filePath?: string,
+): CanvasEditorLocation | null {
+	const leaves = app.workspace.getLeavesOfType("canvas");
+	if (!leaves || leaves.length === 0) return null; // no canvas open — bail early
+	const editorDom: HTMLElement | undefined = (editor as any)?.cm?.contentDOM;
+	for (const leaf of leaves) {
+		const view = leaf.view as unknown as CanvasViewMin;
+		if (!view?.canvas) continue;
+		const path = view.file?.path ?? "";
+		if (filePath !== undefined && path !== filePath) continue;
+		const nodeId = findCanvasNodeIdInView(view, editor, editorDom);
+		if (nodeId) return { leaf, view, filePath: path, nodeId };
+	}
+	return null;
+}
+
+/**
+ * True when `editor` belongs to a canvas node (rather than a markdown note).
+ * Shared by both suggest classes so the probing lives in exactly one place
+ * (#18).
+ */
+export function isCanvasNodeEditor(app: App, editor: Editor): boolean {
+	return findCanvasLeafForEditor(app, editor) !== null;
+}
+
+/**
+ * Trigger-time node identification (D-01).
+ *
+ * Returns the matched node id for `editor` inside the canvas at `filePath`, or
+ * null if no match (D-03 — caller logs warn). Thin wrapper over
+ * findCanvasLeafForEditor so leaf lookup / node probing is not duplicated.
  */
 export function findCanvasNodeIdForEditor(
 	app: App,
 	filePath: string,
 	editor: Editor,
 ): string | null {
-	const leaves = app.workspace.getLeavesOfType("canvas");
-	const editorDom: HTMLElement | undefined = (editor as any)?.cm?.contentDOM;
-	for (const leaf of leaves) {
-		const view = leaf.view as unknown as CanvasViewMin;
-		if (!view?.canvas || view.file?.path !== filePath) continue;
-		for (const node of view.canvas.nodes.values()) {
-			if (!probeLogged) {
-				console.log(
-					`Inline Pi: first canvas trigger — node.child keys = ${JSON.stringify(
-						Object.keys(node.child ?? {}),
-					)}`,
-				);
-				probeLogged = true;
-			}
-			// Primary: editor-identity match.
-			if (node.child?.editor && node.child.editor === editor) return node.id;
-			// Fallback: DOM-containment match when child.editor is undefined
-			// (per RESEARCH Pitfall 2; tested explicitly per checker #3).
-			if (editorDom && node.contentEl?.contains(editorDom as unknown as Node)) {
-				return node.id;
-			}
-		}
-	}
-	return null;
+	return findCanvasLeafForEditor(app, editor, filePath)?.nodeId ?? null;
 }
 
 /**

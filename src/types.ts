@@ -29,6 +29,4 @@ export interface InlinePiPluginLike {
 	saveSettings(): Promise<void>;
 	/** Push a settings working-directory change to the running PiClient (issue #4). */
 	setPiWorkingDirectory?(dir: string): void;
-	/** Event hooks for P4 callout/streaming (optional). */
-	hooks?: { onSettle?: (file: any, cursor: any, result: any) => void; onDelta?: (file: any, cursor: any, delta: string) => void };
 }

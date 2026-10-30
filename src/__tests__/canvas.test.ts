@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { App, Editor, Notice, TFile } from "obsidian";
 import {
 	deliverCanvasReply,
+	findCanvasLeafForEditor,
 	findCanvasNodeIdForEditor,
+	isCanvasNodeEditor,
 	patchCanvasJson,
 	probeCanvasApi,
 	writeCanvasReply,
@@ -590,6 +592,60 @@ describe("deliverCanvasReply (orchestration)", () => {
 		expect(processSpy).not.toHaveBeenCalled();
 		// File untouched
 		expect(app.vault._read("x.canvas")).toBe(SAMPLE_CANVAS_JSON);
+	});
+});
+
+describe("findCanvasLeafForEditor / isCanvasNodeEditor (#18 shared detection)", () => {
+	it("yields the owning leaf, .canvas path, and node id", () => {
+		const editor = new Editor();
+		const mock = makeCanvasViewMock("board.canvas", [
+			{ id: "n1", text: "...", editor },
+		]);
+		const app = new App();
+		app.workspace.getLeavesOfType = vi.fn(() => [mock as any]);
+
+		const location = findCanvasLeafForEditor(app, editor);
+		expect(location).not.toBeNull();
+		expect(location?.nodeId).toBe("n1");
+		expect(location?.filePath).toBe("board.canvas");
+		expect(location?.leaf).toBe(mock);
+		expect(location?.view).toBe(mock.view);
+
+		expect(isCanvasNodeEditor(app, editor)).toBe(true);
+	});
+
+	it("returns null / false when no canvas leaves are open (cheap early return)", () => {
+		const app = new App();
+		const getLeavesOfType = vi.fn(() => []);
+		app.workspace.getLeavesOfType = getLeavesOfType;
+		const editor = new Editor();
+
+		expect(findCanvasLeafForEditor(app, editor)).toBeNull();
+		expect(isCanvasNodeEditor(app, editor)).toBe(false);
+	});
+
+	it("returns null / false for a markdown editor while a canvas is open", () => {
+		const canvasEditor = new Editor();
+		const mock = makeCanvasViewMock("board.canvas", [
+			{ id: "n1", text: "...", editor: canvasEditor },
+		]);
+		const app = new App();
+		app.workspace.getLeavesOfType = vi.fn(() => [mock as any]);
+
+		expect(findCanvasLeafForEditor(app, new Editor())).toBeNull();
+		expect(isCanvasNodeEditor(app, new Editor())).toBe(false);
+	});
+
+	it("restricts the search when a filePath is supplied", () => {
+		const editor = new Editor();
+		const mock = makeCanvasViewMock("board.canvas", [
+			{ id: "n1", text: "...", editor },
+		]);
+		const app = new App();
+		app.workspace.getLeavesOfType = vi.fn(() => [mock as any]);
+
+		expect(findCanvasLeafForEditor(app, editor, "board.canvas")?.nodeId).toBe("n1");
+		expect(findCanvasLeafForEditor(app, editor, "other.canvas")).toBeNull();
 	});
 });
 

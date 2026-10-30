@@ -13,6 +13,7 @@ import {
 } from "./callout-streaming";
 import { buildPromptInstructions } from "./instructions";
 import { buildCalloutHeader } from "./callout";
+import { isCanvasNodeEditor } from "./canvas";
 
 /**
  * Pure function for trigger detection — exported for unit testing.
@@ -48,6 +49,12 @@ export class InlinePiSuggest extends EditorSuggest<string> {
 		editor: Editor,
 		_file: TFile | null
 	): EditorSuggestTriggerInfo | null {
+		// #18: canvas node editors are handled by InlinePiCanvasSuggest. Two
+		// stacked suggests both matching `;;` let the markdown one hijack the
+		// keystroke on canvas, where Obsidian provides no `TFile`.
+		if (isCanvasNodeEditor(this.plugin.app, editor)) {
+			return null;
+		}
 		const lineText = editor.getLine(cursor.line);
 		const result = findTrigger(
 			lineText,
@@ -88,7 +95,10 @@ export class InlinePiSuggest extends EditorSuggest<string> {
 		const { editor, start, end, file } = ctx;
 
 		if (!file) {
-			console.warn("Inline Pi: selectSuggestion called without a file");
+			// Defensive only: onTrigger declines canvas node editors (#18), and
+			// markdown editors always carry a TFile. Keep the no-op so a stray
+			// context can never throw.
+			console.warn("Inline Pi: markdown selectSuggestion called without a file");
 			return;
 		}
 

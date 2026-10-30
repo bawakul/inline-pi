@@ -13,7 +13,9 @@ import { buildPromptInstructions } from "./instructions";
 import { buildCalloutHeader } from "./callout";
 import {
 	deliverCanvasReply,
+	findCanvasLeafForEditor,
 	findCanvasNodeIdForEditor,
+	isCanvasNodeEditor,
 } from "./canvas";
 
 /**
@@ -80,17 +82,11 @@ export function prepareCanvasCallout(
 	const handle = insertPendingCallout(editor, { path: filePath } as TFile, query);
 	const promptId = handle.id;
 
-	// Wire settle and abort callbacks
-	const typedHandle = handle as any;
-	typedHandle.wireSettle((result: any) => {
-		// Route settle to plugin's hook system via the event hooks
-		const hooks = (plugin as any).hooks;
-		if (hooks?.onSettle) {
-			hooks.onSettle({ path: filePath } as TFile, cursor, result);
-		}
-	});
-
-	typedHandle.wireAbort(() => {
+	// Wire the abort callback. Settle needs no wiring here: piClient.prompt's
+	// own onSettle below hands the result straight to handle.onSettle, which
+	// replaces the callout in place. (The old wireSettle→plugin.hooks routing
+	// was dead — main.ts never assigned `this.hooks`.)
+	(handle as any).wireAbort(() => {
 		void piClient.abort().catch(() => {
 			console.warn(`Inline Pi: abort failed for ${promptId}`);
 		});
@@ -140,31 +136,14 @@ export class InlinePiCanvasSuggest extends EditorSuggest<string> {
 		this.plugin = plugin;
 	}
 
-	/**
-	 * Check if the current editor is a canvas node editor by probing the workspace
-	 * for canvas leaves and checking if any node's editor matches the current editor.
-	 */
-	private isCanvasNodeEditor(editor: Editor): boolean {
-		const leaves = this.plugin.app.workspace.getLeavesOfType("canvas");
-		for (const leaf of leaves) {
-			const view = leaf.view as any;
-			if (!view?.canvas) continue;
-			for (const node of view.canvas.nodes.values()) {
-				if (node.child?.editor === editor) {
-					return true;
-				}
-			}
-		}
-		return false;
-	}
-
 	onTrigger(
 		cursor: EditorPosition,
 		editor: Editor,
 		_file: TFile | null
 	): EditorSuggestTriggerInfo | null {
-		// Only trigger if the editor is a canvas node editor
-		if (!this.isCanvasNodeEditor(editor)) {
+		// Only trigger if the editor is a canvas node editor (shared detector,
+		// #18 — the same one the markdown suggest uses to stand down).
+		if (!isCanvasNodeEditor(this.plugin.app, editor)) {
 			return null;
 		}
 
@@ -206,12 +185,18 @@ export class InlinePiCanvasSuggest extends EditorSuggest<string> {
 		if (!ctx) {
 			return;
 		}
-		const { editor, start, end, file } = ctx;
+		const { editor, start, end } = ctx;
 
-		if (!file) {
-			console.warn("Inline Pi: selectSuggestion called without a file");
+		// #18: Obsidian passes no TFile for canvas node editors, so derive the
+		// owning `.canvas` path from the leaf that holds this editor.
+		const location = findCanvasLeafForEditor(this.plugin.app, editor);
+		if (!location || !location.filePath) {
+			console.warn(
+				"Inline Pi: canvas selectSuggestion could not resolve the .canvas file for this editor",
+			);
 			return;
 		}
+		const filePath = location.filePath;
 
 		// Get required services from plugin
 		const piClient = (this.plugin as any).getPiClient?.();
@@ -225,7 +210,7 @@ export class InlinePiCanvasSuggest extends EditorSuggest<string> {
 		}
 
 		// Use the same prepareCanvasCallout logic as the trigger
-		const result = prepareCanvasCallout(this.plugin, file.path, editor);
+		const result = prepareCanvasCallout(this.plugin, filePath, editor);
 		if (!result || !result.handle) {
 			console.warn("Inline Pi: failed to prepare canvas callout");
 		}

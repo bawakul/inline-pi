@@ -3,6 +3,31 @@ import { findTrigger, InlinePiSuggest } from "../suggest";
 import { App, Editor, TFile } from "obsidian";
 import { DEFAULT_SETTINGS } from "../settings";
 
+/**
+ * Build an app whose open canvas leaves hold exactly `editor` as a node editor.
+ * Used to reproduce the #18 shape where Obsidian hands the suggest a canvas
+ * node editor with `file: null`.
+ */
+function appWithCanvasNode(editor: Editor): App {
+	const app = new App();
+	app.workspace.getLeavesOfType = vi.fn((type: string) =>
+		type === "canvas"
+			? [
+				{
+					view: {
+						canvas: {
+							nodes: new Map([["node-1", { id: "node-1", child: { editor } }]]),
+							requestSave: vi.fn(),
+						},
+						file: { path: "board.canvas" },
+					},
+				} as any,
+			]
+			: [],
+	);
+	return app;
+}
+
 describe("findTrigger", () => {
 	it('detects ;; at the start of line with content after', () => {
 		const result = findTrigger(";;hello", 7, ";;");
@@ -47,6 +72,40 @@ describe("findTrigger", () => {
 	it('handles longer trigger phrase', () => {
 		const result = findTrigger("text :::pi question", 19, ":::");
 		expect(result).toEqual({ triggerIndex: 5, query: "pi question" });
+	});
+});
+
+describe("InlinePiSuggest onTrigger (#18 — canvas guard)", () => {
+	it("returns null for a canvas node editor so the canvas suggest owns the keystroke", () => {
+		const line = ";; weather report";
+		const canvasEditor = {
+			getLine: vi.fn(() => line),
+			getCursor: vi.fn(() => ({ line: 0, ch: line.length })),
+		} as unknown as Editor;
+		const app = appWithCanvasNode(canvasEditor);
+		const plugin = { app, settings: { ...DEFAULT_SETTINGS } };
+		const suggest = new InlinePiSuggest(plugin as any);
+
+		// file is null on canvas — the markdown suggest must decline, not dead-end.
+		expect(suggest.onTrigger({ line: 0, ch: line.length }, canvasEditor, null)).toBeNull();
+	});
+
+	it("still triggers for a markdown editor while a canvas is open", () => {
+		const canvasEditor = { getLine: vi.fn(() => "canvas text") } as unknown as Editor;
+		const app = appWithCanvasNode(canvasEditor);
+		const plugin = { app, settings: { ...DEFAULT_SETTINGS } };
+		const suggest = new InlinePiSuggest(plugin as any);
+
+		// ch is one past the last char — the cursor sits after "report".
+		const line = ";; weather report";
+		const markdownEditor = { getLine: vi.fn(() => line) } as unknown as Editor;
+		const info = suggest.onTrigger({ line: 0, ch: line.length }, markdownEditor, {
+			path: "note.md",
+		} as unknown as TFile);
+
+		expect(info).not.toBeNull();
+		expect(info?.start).toEqual({ line: 0, ch: 0 });
+		expect(info?.query).toBe(" weather report");
 	});
 });
 
@@ -131,5 +190,49 @@ describe("InlinePiSuggest selectSuggestion", () => {
 		const message = (piClient.prompt as any).mock.calls[0][0];
 		expect(message).toContain("weather report for Berlin");
 		expect(message).toContain("## Question");
+	});
+
+	it("no-ops safely when the context has no file (#18 canvas dead-end guard)", () => {
+		const app = new App();
+		const piClient = { prompt: vi.fn().mockResolvedValue("prompt-1") };
+		const abortWatcher = { registerPendingCallout: vi.fn() };
+		const plugin = {
+			app,
+			settings: { ...DEFAULT_SETTINGS },
+			getPiClient: () => piClient,
+			getAbortWatcher: () => abortWatcher,
+		};
+		const suggest = new InlinePiSuggest(plugin as any);
+
+		const replaceRange = vi.fn();
+		const setCursor = vi.fn();
+		const editor = {
+			replaceRange,
+			setCursor,
+			getCursor: vi.fn(() => ({ line: 0, ch: 0 })),
+			getLine: vi.fn(() => ";; hello"),
+			getValue: vi.fn(() => ""),
+		} as unknown as Editor;
+
+		(suggest as any).context = {
+			editor,
+			start: { line: 0, ch: 0 },
+			end: { line: 0, ch: 7 },
+			query: "hello",
+			// The broken shape: canvas node editor contexts have no TFile.
+			file: null,
+		};
+
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		expect(() => suggest.selectSuggestion("hello", {} as MouseEvent)).not.toThrow();
+
+		// No callout mutation, no prompt, no abort-watcher registration.
+		expect(replaceRange).not.toHaveBeenCalled();
+		expect(setCursor).not.toHaveBeenCalled();
+		expect(piClient.prompt).not.toHaveBeenCalled();
+		expect(abortWatcher.registerPendingCallout).not.toHaveBeenCalled();
+		expect(warnSpy).toHaveBeenCalled();
+
+		warnSpy.mockRestore();
 	});
 });

@@ -164,8 +164,11 @@ export function buildErrorCallout(query: string, errorMsg: string): string {
  * progress (thinking / tool calls / byte count) is shown in the status bar
  * by main.ts via the pi-client `onActivity` callback.
  *
- * The caller MUST call `handle.wireSettle()` and `handle.wireAbort()` after
- * construction to connect the callbacks from main.ts hooks.
+ * Settlement needs no wiring: callers pass `onSettle` to `piClient.prompt`
+ * and forward the result to `handle.onSettle(result)`. Callers that need to
+ * abort the underlying run should call `handle.wireAbort()` after
+ * construction. (`wireSettle` still exists for optional extra routing, but
+ * nothing depends on it — see #18.)
  *
  * @param editor Obsidian editor
  * @param file The current TFile

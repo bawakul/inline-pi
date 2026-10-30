@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { findCanvasTrigger, prepareCanvasCallout } from "../canvas-trigger";
+import {
+	findCanvasTrigger,
+	InlinePiCanvasSuggest,
+	prepareCanvasCallout,
+} from "../canvas-trigger";
 import { Editor } from "obsidian";
 
 /**
@@ -149,3 +153,135 @@ describe("prepareCanvasCallout", () => {
 		expect(message).toContain("Node ID: node-1");
 	});
 });
+	describe("InlinePiCanvasSuggest (#18 — canvas contexts carry no TFile)", () => {
+		const QUERY = "weather report for Berlin";
+
+		/**
+		 * Build the broken-but-real shape Obsidian hands to canvas node editors:
+		 * `ctx.file` is null. The editor must be resolvable through the canvas leaf
+		 * for the canvas suggest to work at all.
+		 */
+		function makeCanvasEditorMock() {
+			return {
+				getCursor: vi.fn(() => ({ line: 0, ch: 28 })),
+				getLine: vi.fn(() => `;; ${QUERY}`),
+				getValue: vi.fn(() => "Some canvas node text."),
+				replaceRange: vi.fn(),
+				setCursor: vi.fn(),
+			} as unknown as Editor;
+		}
+
+		function makeCanvasLeaf(filePath: string, editor: Editor) {
+			const nodes = new Map<string, any>();
+			nodes.set("node-1", { id: "node-1", child: { editor } });
+			return {
+				view: {
+					canvas: { nodes, requestSave: vi.fn() },
+					file: { path: filePath },
+				},
+			};
+		}
+
+		function makePlugin(leaves: any[], piClient: any) {
+			return {
+				app: {
+					workspace: {
+						getLeavesOfType: vi.fn((type: string) =>
+							type === "canvas" ? leaves : [],
+						),
+					},
+					commands: {
+						commands: { "editor:save-file": true },
+						executeCommandById: vi.fn(),
+					},
+				},
+				settings: { triggerPhrase: ";;" },
+				getPiClient: vi.fn(() => piClient),
+			} as any;
+		}
+
+		it("selectSuggestion proceeds via the derived .canvas path when ctx.file is null", () => {
+			const editor = makeCanvasEditorMock();
+			const piClient = {
+				prompt: vi.fn().mockResolvedValue("prompt-1"),
+				abort: vi.fn().mockResolvedValue(undefined),
+			};
+			const plugin = makePlugin([makeCanvasLeaf("board.canvas", editor)], piClient);
+			const suggest = new InlinePiCanvasSuggest(plugin);
+
+			(suggest as any).context = {
+				editor,
+				start: { line: 0, ch: 0 },
+				end: { line: 0, ch: 28 },
+				query: QUERY,
+				// The shape that dead-ended the canvas path: no file.
+				file: null,
+			};
+
+			suggest.selectSuggestion(QUERY, {} as MouseEvent);
+
+			// Boundary assertion: the call reached pi with the derived path.
+			expect(piClient.prompt).toHaveBeenCalledOnce();
+			const message = (piClient.prompt as any).mock.calls[0][0];
+			expect(message).toContain(QUERY);
+			expect(message).toContain("## Question");
+			expect(message).toContain("board.canvas");
+			expect(message).toContain("Node ID: node-1");
+			// The pending callout was inserted into the node editor.
+			expect((editor.replaceRange as any)).toHaveBeenCalled();
+		});
+
+		it("selectSuggestion warns and no-ops when no canvas leaf matches the editor", () => {
+			const editor = makeCanvasEditorMock();
+			const piClient = {
+				prompt: vi.fn().mockResolvedValue("prompt-1"),
+				abort: vi.fn().mockResolvedValue(undefined),
+			};
+			// Canvas leaf exists but owns a different editor.
+			const plugin = makePlugin(
+				[makeCanvasLeaf("board.canvas", makeCanvasEditorMock())],
+				piClient,
+			);
+			const suggest = new InlinePiCanvasSuggest(plugin);
+			const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+			(suggest as any).context = {
+				editor,
+				start: { line: 0, ch: 0 },
+				end: { line: 0, ch: 28 },
+				query: QUERY,
+				file: null,
+			};
+
+			expect(() => suggest.selectSuggestion(QUERY, {} as MouseEvent)).not.toThrow();
+			expect(piClient.prompt).not.toHaveBeenCalled();
+			expect((editor.replaceRange as any)).not.toHaveBeenCalled();
+			expect(
+				warnSpy.mock.calls.some((args) =>
+					String(args[0]).includes("could not resolve the .canvas file"),
+				),
+			).toBe(true);
+
+			warnSpy.mockRestore();
+		});
+
+		it("onTrigger triggers on a canvas node editor with a null file", () => {
+			const editor = makeCanvasEditorMock();
+			const plugin = makePlugin([makeCanvasLeaf("board.canvas", editor)], null);
+			const suggest = new InlinePiCanvasSuggest(plugin);
+
+			const info = suggest.onTrigger({ line: 0, ch: 28 }, editor, null);
+			expect(info).not.toBeNull();
+			expect(info?.start).toEqual({ line: 0, ch: 0 });
+			expect(info?.query).toBe(` ${QUERY}`);
+		});
+
+		it("onTrigger does not trigger for a markdown editor", () => {
+			const canvasEditor = makeCanvasEditorMock();
+			const plugin = makePlugin([makeCanvasLeaf("board.canvas", canvasEditor)], null);
+			const suggest = new InlinePiCanvasSuggest(plugin);
+
+			const markdownEditor = makeCanvasEditorMock(); // same lines, not in a canvas
+			expect(suggest.onTrigger({ line: 0, ch: 28 }, markdownEditor, null)).toBeNull();
+		});
+	});
