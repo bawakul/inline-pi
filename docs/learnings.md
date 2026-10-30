@@ -69,3 +69,45 @@ The other `pi` processes in `ps aux | grep pi` were **terminal pi sessions** (pa
 **Decision for testing:** use the **vault root** (a clean cwd with a minimal `AGENTS.md`) as the working directory for inline-pi testing, not `Bawa's Lab`. This keeps the spawned pi a plain Q&A bot without the lab's tools/skills/MCP. (Filed as issues #5 and #6.)
 
 **Lesson:** the cwd is the agent's *entire world*. Pointing inline-pi at a project root loads that project's agent config — tools, skills, MCP, the lot. For inline-note Q&A, either use a stripped cwd, a minimal AGENTS.md, or pi flags that disable tools. `--thinking off` is not enough.
+
+---
+
+## 2026-10-27 · The model imitated prior answers — because the instructions told it to read them
+
+**Symptom:** a `;;ping` came back as `**Claude:** pong — what can I help with?` — the model role-playing the callout wrapper it had seen in the note, while also firing a `read` tool for a one-word question (issue #9's mimicry).
+
+**Root cause:** `INSTRUCTIONS_PREFIX` told the agent to read the file first *including* "any prior `> [!claude]` callout blocks (those are previous Q&A exchanges)." The agent obeyed literally: it read the note, found prior answers, and imitated their format — wrapper label and all.
+
+**Fix:** never ask the agent to go looking for prior answers. `stripCalloutBlocks` in `src/instructions.ts` now **removes** `> [!claude]`/`> [!claude-done]` blocks from the context before it is sent, so the model never sees them.
+
+**Near-miss in the same session (retracted):** an early test appeared to prove *session continuation works* — the agent said "I already have the context from the previous read." Wrong: the agent had read the note file, and the note contained the first attempt's text. Any apparent memory in a `--no-session` agent is text on disk.
+
+**Lesson:** (1) If you point a model at examples, it will imitate them — decide whether that's wanted before making prior answers part of the context. (2) When an agent seems to "remember," find the storage before crediting the mechanism. It's almost always the note, not a session.
+
+---
+
+## 2026-10-28 · "Read the file first" was load-bearing — it was the only thing carrying the question (issue #10)
+
+**Symptom:** after the note context moved into the prompt, `;; weather report for Berlin` produced "I'm ready, type `;;`…" — an answer to no question at all.
+
+**Root cause:** `piClient.prompt()` sent `buildPromptInstructions(...)` — instructions + note context — and the user's query string **never entered the prompt**. It reached pi only because the old instruction told the agent to read the note and find the `;;question` line there. The "roundabout" instruction wasn't decoration; it was the transport. Removing it exposed a latent bug that had existed since M1.
+
+**Fix (commit c0de3ad):** the question is now passed explicitly and appended as a `## Question` section after the note context, threaded from both entry points (`suggest.ts`, `canvas-trigger.ts`).
+
+**Lesson:** before deleting an instruction, ask what data was riding on it. A mechanism that looks like a holdover can be the only path the payload takes.
+
+### Sub-lesson: the test suite was green because it only asserted the half being changed
+
+133 tests passed on functionally broken code. Planner, worker, and review all traced the *context*; nothing traced the *question*. The regression tests that actually guard this (both paths, `suggest.test.ts` / `canvas-trigger.test.ts`) mock `piClient` and assert on the **message that reaches `piClient.prompt`** — the boundary where data crosses into the dependency. **Assert at the boundary, not on the builder's internals; "green" only covers the seam you looked at.**
+
+---
+
+## 2026-10-28 · An off-by-one in a *test* made a fixed bug look re-broken
+
+**Symptom:** while writing the canvas-path regression test for #10, the query arrived as `weather report for Berli` — reading exactly like the production bug being back.
+
+**Root cause:** the test hardcoded `cursor.ch: 27` on a 28-char line. `findCanvasTrigger` does `lineText.substring(0, cursor.ch)`, and `ch` is an index **one past** the last character — so the last letter was cut. The production code was fine; the test's constructed input was wrong.
+
+**Fix:** the test sets `ch: 28` (derived from the line length, with a comment explaining the semantics).
+
+**Lesson:** derive cursors from `line.length`, never a hardcoded index — and when a new test "reproduces the bug," suspect the test's own input before suspecting the code. Tests can lie in both directions.
