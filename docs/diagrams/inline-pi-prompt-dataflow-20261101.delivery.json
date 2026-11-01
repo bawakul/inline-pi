@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "7c0d9d25-ed52-4b34-abe2-b58c8afa60db",
+  "status": "current",
+  "command": "deliver",
+  "type": "dataflow",
+  "input": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/.archify/dataflow-inlinepi-prompt-20261101-170600/candidate.json",
+  "output": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/docs/diagrams/inline-pi-prompt-dataflow-20261101.html",
+  "specification": {
+    "sha256": "40360c055b261b93c9e54f79fa2bd35de4928051f511ffc83b0d29c652553759",
+    "bytes": 12207
+  },
+  "artifact": {
+    "sha256": "ace27a315cacbfe58fc7aaa4ade52e0358cc52a858255c52664f1e197076d450",
+    "bytes": 854969
+  }
+}

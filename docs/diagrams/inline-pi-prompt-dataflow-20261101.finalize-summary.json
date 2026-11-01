@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "dataflow",
+  "quality": "standard",
+  "specification": {
+    "path": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/.archify/dataflow-inlinepi-prompt-20261101-170600/candidate.json",
+    "sha256": "40360c055b261b93c9e54f79fa2bd35de4928051f511ffc83b0d29c652553759",
+    "bytes": 12207
+  },
+  "artifact": {
+    "path": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/docs/diagrams/inline-pi-prompt-dataflow-20261101.html",
+    "sha256": "ace27a315cacbfe58fc7aaa4ade52e0358cc52a858255c52664f1e197076d450",
+    "bytes": 854969
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/docs/diagrams/inline-pi-prompt-dataflow-20261101.finalize.json",
+    "summaryReceipt": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/docs/diagrams/inline-pi-prompt-dataflow-20261101.finalize-summary.json",
+    "browserCheckReceipt": "/Users/bharadwajkulkarni/Documents/Bawa's Lab/inline-pi/docs/diagrams/inline-pi-prompt-dataflow-20261101.browser-check.json"
+  },
+  "visualReview": "not-requested",
+  "durationMs": 2885,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  },
+  "visualReviewRecommendation": {
+    "action": "inspect-route-readability",
+    "signals": {
+      "routesOverSuggestedStretch": 1
+    },
+    "reason": "Automated gates passed, but crossings or detours still need perceptual review before claiming visual quality.",
+    "affectedRoutes": {
+      "crossings": [],
+      "detours": [
+        {
+          "relationship": {
+            "id": "f14",
+            "from": "abortwatcher",
+            "to": "pc",
+            "label": "abort run",
+            "collectionIndex": 13,
+            "artifactIndex": 14
+          },
+          "bends": 2,
+          "stretch": 1.351,
+          "directCorridorBlockers": [
+            {
+              "id": "pi",
+              "label": "pi process",
+              "box": [
+                880,
+                242,
+                160,
+                58
+              ]
+            },
+            {
+              "id": "events",
+              "label": "delta / activity / settle",
+              "box": [
+                880,
+                356,
+                160,
+                58
+              ]
+            },
+            {
+              "id": "settle",
+              "label": "onSettle",
+              "box": [
+                880,
+                470,
+                160,
+                58
+              ]
+            }
+          ]
+        }
+      ],
+      "truncated": false
+    },
+    "repair": "Advisory only: this mode places or routes these relationships itself. Report them; do not remove relationships or meaning to reduce crossings."
+  }
+}

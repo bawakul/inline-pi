@@ -1,0 +1,256 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "inline-pi — Prompt Data-Flow",
+    "locale": "en",
+    "output": "docs/diagrams/inline-pi-prompt-dataflow-20261101.html",
+    "quality_profile": "standard",
+    "repository": {
+      "url": "https://github.com/bawakul/inline-pi",
+      "provider": "github",
+      "revision": "40d21cab87cab72baae9b8fc39f26a44f265579c"
+    },
+    "legend": {
+      "mode": "all",
+      "entries": {
+        "emphasis": {
+          "label": "the user's question"
+        },
+        "default": {
+          "label": "instructions · context · control"
+        },
+        "dashed": {
+          "label": "events back to the UI"
+        },
+        "security": {
+          "label": "kill switch — abort"
+        }
+      }
+    },
+    "viewBox": [1200, 720]
+  },
+  "stages": [
+    { "label": "Trigger" },
+    { "label": "Capture" },
+    { "label": "Answer box" },
+    { "label": "Build payload" },
+    { "label": "pi & UI" }
+  ],
+  "nodes": [
+    {
+      "id": "user",
+      "type": "frontend",
+      "label": "User",
+      "sublabel": "types ;;question",
+      "icon": "person",
+      "stage": 0,
+      "row": 1,
+      "width": 150,
+      "description": "You, writing in an Obsidian note (markdown or a canvas node). You type a trigger phrase followed by a question; the plugin takes it from there."
+    },
+    {
+      "id": "mdSuggest",
+      "type": "backend",
+      "label": "InlinePiSuggest",
+      "sublabel": "markdown · onTrigger",
+      "stage": 1,
+      "row": 0,
+      "width": 160,
+      "description": "The markdown trigger provider. When you type ;; in a normal note it wakes, scans the line before the cursor, and catches the question as `query`. It deliberately declines canvas node editors (#18) so it cannot hijack the keystroke there.",
+      "sources": [
+        { "path": "src/suggest.ts", "line": 39, "end_line": 66, "label": "declines canvas editors" }
+      ]
+    },
+    {
+      "id": "canvasSuggest",
+      "type": "backend",
+      "label": "InlinePiCanvasSuggest",
+      "sublabel": "canvas · onTrigger",
+      "stage": 1,
+      "row": 2,
+      "width": 160,
+      "description": "The canvas twin (added with the #18 fix, Oct 30). Two stacked trigger providers used to both match ;; and the markdown one won on canvas, where Obsidian provides no TFile — so canvas ;; dead-ended. Now this provider only fires inside canvas node editors.",
+      "sources": [
+        { "path": "src/canvas-trigger.ts", "line": 128, "end_line": 160, "label": "canvas-only suggest" },
+        { "path": "src/suggest.ts", "line": 98, "end_line": 104, "label": "why two providers" }
+      ]
+    },
+    {
+      "id": "select",
+      "type": "backend",
+      "label": "selectSuggestion",
+      "sublabel": "markdown path",
+      "stage": 2,
+      "row": 0,
+      "width": 160,
+      "description": "Runs when you pick the suggestion from the popup. It holds your question as `value`, inserts the pending callout, captures the note text around the cursor, and passes `value` into the payload build — the question now travels the whole way (#10 closed Oct 28).",
+      "sources": [
+        { "path": "src/suggest.ts", "line": 87, "end_line": 150, "label": "value → callout + payload" }
+      ]
+    },
+    {
+      "id": "callout",
+      "type": "database",
+      "label": "insertPendingCallout",
+      "sublabel": "callout-streaming.ts",
+      "stage": 2,
+      "row": 1,
+      "width": 160,
+      "description": "Creates the answer box (`> [!claude] {query}`) in the note and stores your question on it as `CalloutInstance.query`. Since T42 the box does NOT stream token-by-token — it holds a static pending header, live progress goes to the status bar, and it is filled in one shot when pi settles.",
+      "sources": [
+        { "path": "src/callout-streaming.ts", "line": 42, "end_line": 63, "label": "CalloutInstance.query" },
+        { "path": "src/callout-streaming.ts", "line": 178, "label": "insertPendingCallout" }
+      ]
+    },
+    {
+      "id": "canvasPrep",
+      "type": "backend",
+      "label": "prepareCanvasCallout",
+      "sublabel": "canvas path · saves file first",
+      "stage": 2,
+      "row": 2,
+      "width": 160,
+      "description": "The canvas twin of selectSuggestion: takes the query, creates the callout node in the canvas, saves the canvas file before sending (so the node exists on disk), and passes `query` into the payload build.",
+      "sources": [
+        { "path": "src/canvas-trigger.ts", "line": 46, "end_line": 122, "label": "save-then-send, query → payload" }
+      ]
+    },
+    {
+      "id": "bpi",
+      "type": "backend",
+      "label": "buildPromptInstructions",
+      "sublabel": "PREFIX + context + Question",
+      "stage": 3,
+      "row": 1,
+      "width": 170,
+      "description": "Assembles the message pi receives: the rewritten standing instructions (PREFIX, #12), the note path, a ±50-line window of the note around the cursor (prior callouts stripped, truncated to 8k chars), and — since #10 closed — a `## Question` section. The signature now takes all four: (notePath, cursorLine, noteText, question).",
+      "sources": [
+        { "path": "src/instructions.ts", "line": 129, "end_line": 146, "label": "question param + block" },
+        { "path": "src/instructions.ts", "line": 33, "end_line": 36, "label": "±50 lines, 8k cap" }
+      ]
+    },
+    {
+      "id": "pc",
+      "type": "backend",
+      "label": "PiClient.prompt",
+      "sublabel": "queues PromptRequest",
+      "stage": 4,
+      "row": 0,
+      "width": 160,
+      "description": "The plugin's messenger to the hidden pi process. A single shared client serves every ;; prompt; requests queue and run one at a time. It also accepts aborts — from the AbortWatcher or the user.",
+      "sources": [
+        { "path": "src/pi-client.ts", "line": 67, "label": "PromptRequest" },
+        { "path": "src/pi-client.ts", "line": 266, "end_line": 267, "label": "queue, one active" }
+      ]
+    },
+    {
+      "id": "pi",
+      "type": "cloud",
+      "label": "pi process",
+      "sublabel": "cli.js --mode rpc",
+      "stage": 4,
+      "row": 1,
+      "width": 160,
+      "description": "A separate headless copy of pi running in the background, started the way pi's own RpcClient does it: `node cli.js --mode rpc --no-session --thinking off`. Thinking is off because ;; Q&A is a fast inline exchange — reasoning models otherwise stream long thinking deltas before any text and the box looks frozen. Receives the payload over stdin, streams events back over stdout.",
+      "sources": [
+        { "path": "src/pi-client.ts", "line": 340, "end_line": 351, "label": "spawn args + why" }
+      ]
+    },
+    {
+      "id": "events",
+      "type": "backend",
+      "label": "delta / activity / settle",
+      "sublabel": "pi-client routes",
+      "stage": 4,
+      "row": 2,
+      "width": 160,
+      "description": "pi's streaming signals, routed by prompt id (stale ids are dropped so a late delta can't corrupt the next run): text deltas, the activity phase (thinking / tool / responding, #6) shown live in the status bar, and the final settlement.",
+      "sources": [
+        { "path": "src/pi-client.ts", "line": 470, "end_line": 495, "label": "id-gated event routing" },
+        { "path": "src/main.ts", "line": 157, "end_line": 168, "label": "status bar render" }
+      ]
+    },
+    {
+      "id": "settle",
+      "type": "database",
+      "label": "onSettle",
+      "sublabel": "replaceCalloutBlock · **Pi:** (#13)",
+      "stage": 4,
+      "row": 3,
+      "width": 160,
+      "description": "When pi finishes, the answer box is replaced wholesale: `> [!claude-done]+ {query}` with the answer under a **Pi:** label (formerly a hardcoded **Claude:** label, #13). Abort and error each get their own callout so the note always tells you how a run ended.",
+      "sources": [
+        { "path": "src/callout-streaming.ts", "line": 92, "end_line": 127, "label": "settle/abort/error replace" }
+      ]
+    },
+    {
+      "id": "abortwatcher",
+      "type": "security",
+      "label": "AbortWatcher",
+      "sublabel": "callout edited → abort",
+      "stage": 4,
+      "row": 4,
+      "width": 160,
+      "description": "The kill switch. While a callout is pending, the watcher checks on every note edit that its header line still exists unchanged. Delete or change the box → the pi run is aborted. The plugin's own writes are suppressed via beginFlush()/endFlush() so filling the answer box never aborts itself.",
+      "sources": [
+        { "path": "src/abort-watcher.ts", "line": 11, "end_line": 40, "label": "watch + abort + flush" },
+        { "path": "src/main.ts", "line": 58, "label": "wired to PiClient" }
+      ]
+    }
+  ],
+  "flows": [
+    { "id": "f1", "from": "user", "to": "mdSuggest", "label": ";;query", "variant": "emphasis" },
+    { "id": "f2", "from": "user", "to": "canvasSuggest", "label": ";;query", "variant": "emphasis" },
+    { "id": "f3", "from": "mdSuggest", "to": "select", "label": "picked", "variant": "default" },
+    { "id": "f4", "from": "canvasSuggest", "to": "canvasPrep", "label": "query", "variant": "default" },
+    { "id": "f5", "from": "select", "to": "callout", "label": "value", "variant": "emphasis", "labelDy": 26 },
+    { "id": "f6", "from": "canvasPrep", "to": "callout", "label": "query", "variant": "emphasis" },
+    { "id": "f7", "from": "select", "to": "bpi", "label": "value — question", "variant": "emphasis" },
+    { "id": "f8", "from": "canvasPrep", "to": "bpi", "label": "query — question", "variant": "emphasis" },
+    { "id": "f9", "from": "bpi", "to": "pc", "label": "built payload", "variant": "default" },
+    { "id": "f10", "from": "pc", "to": "pi", "label": "stdin JSON-RPC", "variant": "default", "labelDy": 25 },
+    { "id": "f11", "from": "pi", "to": "events", "label": "streamed events", "variant": "dashed", "labelDy": 25 },
+    { "id": "f12", "from": "events", "to": "settle", "label": "final content", "variant": "dashed", "labelDy": 25 },
+    { "id": "f13", "from": "callout", "to": "abortwatcher", "label": "register callout", "variant": "default" },
+    { "id": "f14", "from": "abortwatcher", "to": "pc", "label": "abort run", "variant": "security", "fromSide": "right", "toSide": "right", "via": [[1120, 613], [1120, 157]] }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "What this is",
+      "items": [
+        "The path a ;; prompt takes through inline-pi, snapshot dated 2026-11-01 at commit 40d21ca.",
+        "Two trigger providers (markdown + canvas, the #18 fix) converge on the answer box; the payload build receives the question from both paths (#10 closed 2026-10-28).",
+        "The return path routes pi's events to the status bar and fills the callout in one shot on settle (T42)."
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "The payload pi receives",
+      "items": [
+        "Rewritten standing instructions, PREFIX (#12): answer from the note in front of you; tools only when the question genuinely needs live data.",
+        "The note path plus a ±50-line window around the cursor — prior Q&A callouts stripped so they can't be mimicked, capped at 8k chars.",
+        "A ## Question section carrying the actual question — the edge that was missing before #10."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Safety valves",
+      "items": [
+        "AbortWatcher kills the run if you delete or edit the pending answer box — the plugin's own writes are exempt (beginFlush/endFlush).",
+        "Events are gated by prompt id: a late delta from an already-settled prompt can't corrupt the next one.",
+        "Prompts queue and run one at a time on the shared pi process."
+      ]
+    },
+    {
+      "dot": "slate",
+      "title": "Keeping this current",
+      "items": [
+        "This is a dated snapshot, not a live view — when the flow changes, regenerate rather than trust this page.",
+        "The authoring source (candidate JSON) is committed next to this HTML in docs/diagrams/ — a refresh means updating it and re-running archify finalize.",
+        "Rendered with Archify; every node cites the src/ lines it was verified against."
+      ]
+    }
+  ]
+}
