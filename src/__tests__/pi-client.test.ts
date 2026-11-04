@@ -336,6 +336,23 @@ describe("PiClient", () => {
 			const hasQueuedDepth = statusChanges.some((s) => s.depth > 0);
 			expect(hasQueuedDepth).toBe(true);
 		});
+
+		it("notifies only prompts that actually wait behind an active run (#29)", async () => {
+			const { client, awaitSettle } = createClientWithSettleTracking();
+
+			const firstQueued = vi.fn();
+			const firstId = await client.prompt("queue test alpha", { onQueued: firstQueued });
+
+			// The first prompt is already active at pi, so the second one queues.
+			const secondQueued = vi.fn();
+			const secondId = await client.prompt("queue test beta", { onQueued: secondQueued });
+
+			await awaitSettle(firstId);
+			await awaitSettle(secondId);
+
+			expect(firstQueued).not.toHaveBeenCalled();
+			expect(secondQueued).toHaveBeenCalledOnce();
+		});
 	});
 
 	describe("Timeout", () => {

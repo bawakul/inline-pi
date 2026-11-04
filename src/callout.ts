@@ -9,6 +9,16 @@ export function buildCalloutHeader(query: string): string {
 }
 
 /**
+ * Build the header for a callout whose prompt is waiting in pi-client's queue.
+ * Same title as the pending header — only the callout type differs, so the
+ * queued look can be styled independently (#29). The header is rewritten back
+ * to `buildCalloutHeader(query)` once pi actually starts the run.
+ */
+export function buildQueuedCalloutHeader(query: string): string {
+	return `> [!claude-queued] ${query}`;
+}
+
+/**
  * Replace a range in the editor with a callout header.
  */
 export function insertCallout(
@@ -44,9 +54,11 @@ export function buildErrorCallout(query: string, errorMsg: string): string {
 }
 
 /**
- * Find a callout block by matching the exact header line in the document.
- * Scans the entire document for `> [!claude] {query}` — this is robust
- * against line drift caused by edits above the callout.
+ * Find a callout block by matching a header line in the document.
+ * Scans the entire document for a line starting with `marker` (a single
+ * prefix, or a list of accepted prefixes — e.g. the pending and queued
+ * `[!claude]` variants). This is robust against line drift caused by edits
+ * above the callout.
  *
  * Falls back to proximity search (±10 lines from nearLine) if query is
  * not provided, for backward compatibility.
@@ -56,20 +68,33 @@ export function buildErrorCallout(query: string, errorMsg: string): string {
 export function findCalloutRange(
 	editor: Editor,
 	nearLine: number,
-	marker: string = "> [!claude] "
+	marker: string | string[] = "> [!claude] "
 ): { from: number; to: number } | null {
 	const lineCount = editor.lineCount();
+	const markers = Array.isArray(marker) ? marker : [marker];
 
-	// Full-document scan for the exact marker
+	// A full-header marker (built from a query, no trailing space — e.g.
+	// `> [!claude] fix`) must match the line EXACTLY: startsWith would alias a
+	// longer query with it as a prefix ("fix" vs "fix typo", #36 review finding 2).
+	// A prefix marker (trailing space) keeps startsWith semantics.
+	const isMatch = (line: string, m: string): boolean =>
+		m.endsWith(" ") ? line.startsWith(m) : line === m;
+
+	// Collect ALL matching lines, then prefer the one closest to nearLine
+	// (#36 review finding 1: first-match-wins rewrites the WRONG callout when
+	// the same query is asked twice — one active, one queued — inverting their
+	// looks mid-run). Ties go to the lower line. Callers that pass no
+	// nearLine get 0, which selects the first match as before.
 	let markerLine = -1;
+	let bestDistance = Infinity;
 	for (let i = 0; i < lineCount; i++) {
 		const line = editor.getLine(i);
-		if (line.startsWith(marker)) {
-			markerLine = i;
-			// Don't break — if there are multiple matches, prefer the one
-			// closest to nearLine. But pending callouts should be unique
-			// since they contain the query text.
-			break;
+		if (markers.some((m) => isMatch(line, m))) {
+			const distance = Math.abs(i - nearLine);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				markerLine = i;
+			}
 		}
 	}
 
@@ -94,9 +119,11 @@ export function findCalloutRange(
 
 /**
  * Find a callout block by query text.
- * Builds the exact header line `> [!claude] {query}` and searches the
- * entire document for it. This is how poll callbacks relocate the callout
- * after the document has been edited.
+ * Builds the possible header lines for `{query}` — the pending/active
+ * `> [!claude] {query}` and the queued `> [!claude-queued] {query}` — and
+ * searches the entire document for either. This is how poll callbacks
+ * relocate the callout after the document has been edited, including after a
+ * queued (#29) header rewrite.
  *
  * Returns inclusive {from, to} line numbers, or null if not found.
  */
@@ -105,8 +132,10 @@ export function findCalloutBlock(
 	query?: string,
 	nearLine?: number
 ): { from: number; to: number } | null {
-	const marker = query ? `> [!claude] ${query}` : "> [!claude] ";
-	return findCalloutRange(editor, nearLine ?? 0, marker);
+	const markers = query
+		? [buildCalloutHeader(query), buildQueuedCalloutHeader(query)]
+		: ["> [!claude] ", "> [!claude-queued] "];
+	return findCalloutRange(editor, nearLine ?? 0, markers);
 }
 
 /**

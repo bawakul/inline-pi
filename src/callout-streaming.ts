@@ -3,6 +3,7 @@ import type { Editor, TFile } from "obsidian";
 import type { PiSettleResult } from "./pi-client";
 import {
 	buildCalloutHeader,
+	buildQueuedCalloutHeader,
 	replaceCalloutBlock,
 	findCalloutBlock,
 } from "./callout";
@@ -34,6 +35,8 @@ export interface CalloutHandle {
 	onSettle(result: PiSettleResult): void;
 	/** Mark the callout as queued (before active). */
 	onQueued(): void;
+	/** Flip a queued callout back to the normal active/pending look. */
+	onActive(): void;
 	/** Abort the underlying run (sends abort to pi-client). */
 	abort(): void;
 }
@@ -78,7 +81,21 @@ class CalloutInstance {
 	public onQueued(): void {
 		if (this.state !== "pending") return;
 		this.state = "queued";
-		// In queued state, keep the pending callout visible.
+		// Rewrite the header to the queued variant (#29). The pending block is a
+		// single header line, so replacing the block is a header rewrite. The
+		// final look is intentionally unstyled for now — see #32.
+		this.replaceWithCallout(buildQueuedCalloutHeader(this.query));
+	}
+
+	/**
+	 * Flip a queued callout back to the ordinary pending header once pi
+	 * actually starts the run. No-op if the callout was never queued (e.g. the
+	 * first prompt of a session, which starts immediately).
+	 */
+	public onActive(): void {
+		if (this.state !== "queued") return;
+		this.state = "pending";
+		this.replaceWithCallout(buildCalloutHeader(this.query));
 	}
 
 	/**
@@ -223,6 +240,7 @@ export function insertPendingCallout(
 		onDelta: (delta) => instance.onDelta(delta),
 		onSettle: (result) => instance.onSettle(result),
 		onQueued: () => instance.onQueued(),
+		onActive: () => instance.onActive(),
 		abort: () => instance.abort(),
 	};
 

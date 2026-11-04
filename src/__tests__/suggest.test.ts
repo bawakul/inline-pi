@@ -235,4 +235,72 @@ describe("InlinePiSuggest selectSuggestion", () => {
 
 		warnSpy.mockRestore();
 	});
+
+	it("drives the queued callout look from pi-client lifecycle callbacks (#29)", async () => {
+		const lines = [";; queued question"];
+		// Stateful replacement: header rewrites must land in the backing lines
+		// or `findCalloutBlock` would keep seeing the original header.
+		const editor = {
+			replaceRange: vi.fn(
+				(
+					replacement: string,
+					from: { line: number; ch: number },
+					to?: { line: number; ch: number }
+				) => {
+					const toLine = to ? to.line : from.line;
+					lines.splice(from.line, toLine - from.line + 1, ...replacement.split("\n"));
+				}
+			),
+			lineCount: () => lines.length,
+			getLine: (n: number) => lines[n] ?? "",
+			setCursor: vi.fn(),
+			getCursor: vi.fn(() => ({ line: 0, ch: 0 })),
+			getValue: vi.fn(() => ""),
+		} as unknown as Editor;
+
+		// A prompt that hasn't been accepted yet — lets us observe the queued
+		// state before onActive fires.
+		let handlers: { onQueued?: () => void; onSettle?: (r: any) => void } = {};
+		let resolvePrompt!: (id: string) => void;
+		const promptPromise = new Promise<string>((res) => {
+			resolvePrompt = res;
+		});
+		const piClient = {
+			prompt: vi.fn((_msg: string, h: any) => {
+				handlers = h;
+				return promptPromise;
+			}),
+			abort: vi.fn().mockResolvedValue(undefined),
+		};
+		const abortWatcher = { registerPendingCallout: vi.fn() };
+		const plugin = {
+			app: new App(),
+			settings: { ...DEFAULT_SETTINGS },
+			getPiClient: () => piClient,
+			getAbortWatcher: () => abortWatcher,
+		};
+		const suggest = new InlinePiSuggest(plugin as any);
+
+		(suggest as any).context = {
+			editor,
+			start: { line: 0, ch: 0 },
+			end: { line: 0, ch: 17 },
+			query: "queued question",
+			file: { path: "test.md" } as unknown as TFile,
+		};
+
+		suggest.selectSuggestion("queued question", {} as MouseEvent);
+
+		expect(lines[0]).toBe("> [!claude] queued question");
+		expect(handlers.onQueued).toBeTypeOf("function");
+
+		// pi-client says the prompt is waiting behind a busy run.
+		handlers.onQueued!();
+		expect(lines[0]).toBe("> [!claude-queued] queued question");
+
+		// pi accepts the run (disposition started/handled) → header flips back.
+		resolvePrompt("prompt-1");
+		await new Promise((r) => setTimeout(r, 0));
+		expect(lines[0]).toBe("> [!claude] queued question");
+	});
 });

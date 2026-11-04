@@ -82,6 +82,8 @@ interface PromptRequest {
 	// Per-prompt streaming handlers (optional, for callout routing)
 	onDelta?: (delta: string) => void;
 	onSettle?: (result: PiSettleResult) => void;
+	/** Called when the prompt is enqueued behind a busy run (#29 queued look). */
+	onQueued?: () => void;
 	// Tool-call count for this run (activity telemetry, issue #6)
 	toolCount: number;
 }
@@ -791,9 +793,10 @@ export class PiClient {
 	 *
 	 * @param message The prompt message
 	 * @param handlers Optional per-prompt handlers for streaming (onDelta, onSettle)
+	 *        and lifecycle (onQueued)
 	 * @returns The prompt id (resolves when accepted by pi, before streaming completes)
 	 */
-	async prompt(message: string, handlers?: { onDelta?: (delta: string) => void; onSettle?: (result: PiSettleResult) => void }): Promise<string> {
+	async prompt(message: string, handlers?: { onDelta?: (delta: string) => void; onSettle?: (result: PiSettleResult) => void; onQueued?: () => void }): Promise<string> {
 		const id = this.nextPromptId();
 		debugLog(`prompt ${id} queue: len=${message.length} cwd=${this.opts.workingDirectory}`);
 		return new Promise((resolveOuter, rejectOuter) => {
@@ -803,6 +806,7 @@ export class PiClient {
 				message,
 				onDelta: handlers?.onDelta,
 				onSettle: handlers?.onSettle,
+				onQueued: handlers?.onQueued,
 				resolve: () => {
 					if (settled) return;
 					settled = true;
@@ -817,6 +821,12 @@ export class PiClient {
 			toolCount: 0,
 			};
 			this.queue.push(req);
+			// #29: a prompt that lands behind a busy run is queued, not pending.
+			// (The #20 drain state folds into this predicate on rebase — during a
+			// drain the queue is also held.) Cold-start spawn delay is NOT marked
+			// queued: pi is booting, not waiting on another run.
+			const willQueue = this.active !== null || this.draining;
+			if (willQueue) req.onQueued?.();
 			this.dispatchNext();
 		});
 	}
