@@ -1,3 +1,4 @@
+import { Notice } from "obsidian";
 import type { Editor, TFile } from "obsidian";
 import type { PiSettleResult } from "./pi-client";
 import {
@@ -139,7 +140,19 @@ class CalloutInstance {
 
 	private replaceWithCallout(newContent: string): void {
 		const currentCallout = findCalloutBlock(this.editor, this.query, this.startLine);
-		if (!currentCallout) return;
+		if (!currentCallout) {
+			// #19: a silent `return` here hid "the reply never lands" for two
+			// weeks. If the callout cannot be located, say so — the usual cause
+			// is a dead editor (a canvas node editor is torn down on blur, so a
+			// handle captured at trigger time can no longer write).
+			console.warn(
+				`Inline Pi: could not find the callout for "${this.query}" in ${this.file.path} — reply not written`,
+			);
+			new Notice(
+				"Inline Pi: couldn't update the callout — the editor may no longer be open",
+			);
+			return;
+		}
 		// Replace the entire callout block with the final content
 		replaceCalloutBlock(this.editor, currentCallout.from, currentCallout.to, newContent);
 	}

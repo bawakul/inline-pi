@@ -4,13 +4,19 @@ import {
 	EditorSuggest,
 	EditorSuggestContext,
 	EditorSuggestTriggerInfo,
+	Notice,
 	TFile,
 } from "obsidian";
 import type { InlinePiPluginLike } from "./types";
 import type { CalloutHandle } from "./callout-streaming";
 import { insertPendingCallout } from "./callout-streaming";
+import type { PiSettleResult } from "./pi-client";
 import { buildPromptInstructions } from "./instructions";
-import { buildCalloutHeader } from "./callout";
+import {
+	buildCalloutHeader,
+	buildErrorCallout,
+	buildResponseCallout,
+} from "./callout";
 import {
 	deliverCanvasReply,
 	findCanvasLeafForEditor,
@@ -82,10 +88,8 @@ export function prepareCanvasCallout(
 	const handle = insertPendingCallout(editor, { path: filePath } as TFile, query);
 	const promptId = handle.id;
 
-	// Wire the abort callback. Settle needs no wiring here: piClient.prompt's
-	// own onSettle below hands the result straight to handle.onSettle, which
-	// replaces the callout in place. (The old wireSettle→plugin.hooks routing
-	// was dead — main.ts never assigned `this.hooks`.)
+	// Wire the abort callback. Abort does not depend on the editor surviving,
+	// so the handle's abort path stays as-is (#19).
 	(handle as any).wireAbort(() => {
 		void piClient.abort().catch(() => {
 			console.warn(`Inline Pi: abort failed for ${promptId}`);
@@ -107,11 +111,49 @@ export function prepareCanvasCallout(
 	// Add node id to the message (appended to instructions)
 	const messageWithNodeId = `${payload}\nNode ID: ${nodeId}`;
 
+	/**
+	 * #19: settle must NOT go through `handle.onSettle` on canvas.
+	 *
+	 * The handle was built around the node's CodeMirror editor captured at
+	 * trigger time. A canvas node's editor is created on focus and destroyed on
+	 * blur; by the time pi settles the editor is detached, so the handle's
+	 * `findCalloutBlock` misses and the reply evaporates silently. Canvas has a
+	 * purpose-built write path — `deliverCanvasReply` (node-ID-first `setData`
+	 * for an open leaf, atomic JSON patch for a closed one) — which works
+	 * whether or not the editor survived. Build the final callout text here and
+	 * hand it to that path instead.
+	 */
+	const deliverSettle = (result: PiSettleResult): void => {
+		const response = result.aborted
+			? buildErrorCallout(query, "Aborted")
+			: result.error
+				? buildErrorCallout(query, result.errorMessage || "pi reported an error")
+				: buildResponseCallout(query, result.finalContent ?? "");
+
+		void deliverCanvasReply(app, filePath, nodeId, query, response)
+			.then((outcome) => {
+				if (outcome.ok) return;
+				// Never evaporate: a failed delivery has to be visible to the user.
+				console.warn(
+					`Inline Pi: canvas reply delivery failed for ${filePath} (node ${nodeId}): ${outcome.reason}`,
+					outcome.error,
+				);
+				new Notice("Inline Pi: couldn't place the answer in the canvas node");
+			})
+			.catch((err: unknown) => {
+				console.warn(
+					`Inline Pi: canvas reply delivery threw for ${filePath} (node ${nodeId})`,
+					err,
+				);
+				new Notice("Inline Pi: couldn't place the answer in the canvas node");
+			});
+	};
+
 	// Enqueue the prompt with pi-client. T42: no onDelta — the callout holds its
 	// pending header until settle; live activity goes to the status bar via the
 	// plugin-level onActivity callback wired in main.ts.
 	void piClient.prompt(messageWithNodeId, {
-		onSettle: (result: any) => handle.onSettle(result),
+		onSettle: deliverSettle,
 	})
 		.then((id: string) => {
 			console.log(`Inline Pi: canvas prompt ${id} accepted by pi`);

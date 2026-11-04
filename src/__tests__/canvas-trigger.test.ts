@@ -1,10 +1,22 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
 	findCanvasTrigger,
 	InlinePiCanvasSuggest,
 	prepareCanvasCallout,
 } from "../canvas-trigger";
-import { Editor } from "obsidian";
+import { deliverCanvasReply } from "../canvas";
+import { buildErrorCallout, buildResponseCallout } from "../callout";
+import { Editor, Notice } from "obsidian";
+
+// #19: the settle path must go through the canvas write path, not the
+// trigger-time editor handle. Mock only `deliverCanvasReply` — the detection
+// helpers stay real so the trigger-side fixtures below keep exercising them.
+vi.mock("../canvas", async (importOriginal) => {
+	const original = await importOriginal<typeof import("../canvas")>();
+	return { ...original, deliverCanvasReply: vi.fn() };
+});
+
+const deliverMock = vi.mocked(deliverCanvasReply);
 
 /**
  * Mock helper for testing canvas trigger detection.
@@ -285,3 +297,170 @@ describe("prepareCanvasCallout", () => {
 			expect(suggest.onTrigger({ line: 0, ch: 28 }, markdownEditor, null)).toBeNull();
 		});
 	});
+
+describe("prepareCanvasCallout settle routing (#19)", () => {
+	// Query keeps the leading space that findCanvasTrigger yields (it slices
+	// the text after `;;`) — same string the pending callout was titled with.
+	const QUERY = " weather report for Berlin";
+
+	function makeSettleFixture() {
+		const editor = {
+			getCursor: vi.fn(() => ({ line: 0, ch: 28 })),
+			getLine: vi.fn(() => ";; weather report for Berlin"),
+			getValue: vi.fn(() => "Some canvas node text."),
+			replaceRange: vi.fn(),
+			setCursor: vi.fn(),
+		} as unknown as Editor;
+
+		const nodes = new Map<string, any>();
+		nodes.set("node-1", { id: "node-1", child: { editor } });
+
+		const piClient = {
+			prompt: vi.fn().mockResolvedValue("prompt-1"),
+			abort: vi.fn().mockResolvedValue(undefined),
+		};
+
+		const plugin = {
+			app: {
+				workspace: {
+					getLeavesOfType: vi.fn((type: string) =>
+						type === "canvas"
+							? [{ view: { canvas: { nodes }, file: { path: "test.canvas" } } }]
+							: [],
+					),
+				},
+				commands: {
+					commands: { "editor:save-file": true },
+					executeCommandById: vi.fn(),
+				},
+			},
+			settings: { triggerPhrase: ";;" },
+			getPiClient: vi.fn(() => piClient),
+		} as any;
+
+		const prepared = prepareCanvasCallout(plugin, "test.canvas", editor);
+		const handlers = (piClient.prompt as any).mock.calls[0][1];
+		return { editor, plugin, piClient, prepared, onSettle: handlers.onSettle };
+	}
+
+	/** Let the deliverCanvasReply promise chain settle. */
+	function flush(): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, 0));
+	}
+
+	beforeEach(() => {
+		Notice.reset();
+		deliverMock.mockReset();
+		deliverMock.mockResolvedValue({ ok: true });
+	});
+
+	it("green settle delivers a response callout through deliverCanvasReply", async () => {
+		const { editor, plugin, prepared, onSettle } = makeSettleFixture();
+		expect(prepared?.nodeId).toBe("node-1");
+
+		onSettle({
+			finalContent: "Sunny, 21°C.",
+			aborted: false,
+			error: false,
+			stopReason: "stop",
+		});
+		await flush();
+
+		expect(deliverMock).toHaveBeenCalledOnce();
+		expect(deliverMock).toHaveBeenCalledWith(
+			plugin.app,
+			"test.canvas",
+			"node-1",
+			QUERY,
+			buildResponseCallout(QUERY, "Sunny, 21°C."),
+		);
+
+		// The dead-editor path must not be touched: only the initial pending
+		// callout insert wrote to the editor.
+		expect((editor.replaceRange as any)).toHaveBeenCalledOnce();
+		// And a successful delivery is quiet.
+		expect(Notice.instances).toHaveLength(0);
+	});
+
+	it("error settle delivers an error callout with pi's message", async () => {
+		const { plugin, onSettle } = makeSettleFixture();
+
+		onSettle({
+			finalContent: "",
+			aborted: false,
+			error: true,
+			errorMessage: "Provider error",
+			stopReason: "error",
+		});
+		await flush();
+
+		expect(deliverMock).toHaveBeenCalledOnce();
+		expect(deliverMock).toHaveBeenCalledWith(
+			plugin.app,
+			"test.canvas",
+			"node-1",
+			QUERY,
+			buildErrorCallout(QUERY, "Provider error"),
+		);
+	});
+
+	it("falls back to a generic error when pi reports no message", async () => {
+		const { onSettle } = makeSettleFixture();
+
+		onSettle({ finalContent: "", aborted: false, error: true, stopReason: "error" });
+		await flush();
+
+		const response = deliverMock.mock.calls[0][4];
+		expect(response).toBe(buildErrorCallout(QUERY, "pi reported an error"));
+	});
+
+	it("aborted settle delivers the Aborted error callout", async () => {
+		const { onSettle } = makeSettleFixture();
+
+		onSettle({
+			finalContent: "Partial answer",
+			aborted: true,
+			error: false,
+			stopReason: "stop",
+		});
+		await flush();
+
+		expect(deliverMock).toHaveBeenCalledOnce();
+		expect(deliverMock.mock.calls[0][4]).toBe(buildErrorCallout(QUERY, "Aborted"));
+	});
+
+	it("warns and notifies when delivery reports failure (no silent evaporation)", async () => {
+		const { onSettle } = makeSettleFixture();
+		deliverMock.mockResolvedValue({ ok: false, reason: "no-match" });
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		onSettle({ finalContent: "answer", aborted: false, error: false, stopReason: "stop" });
+		await flush();
+
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(String(warnSpy.mock.calls[0][0])).toContain("canvas reply delivery failed");
+		expect(String(warnSpy.mock.calls[0][0])).toContain("no-match");
+		expect(Notice.instances.map((n) => n.message)).toContain(
+			"Inline Pi: couldn't place the answer in the canvas node",
+		);
+
+		warnSpy.mockRestore();
+	});
+
+	it("warns and notifies when delivery throws", async () => {
+		const { onSettle } = makeSettleFixture();
+		deliverMock.mockRejectedValue(new Error("canvas exploded"));
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+		onSettle({ finalContent: "answer", aborted: false, error: false, stopReason: "stop" });
+		await flush();
+
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(String(warnSpy.mock.calls[0][0])).toContain("canvas reply delivery threw");
+		expect(Notice.instances.map((n) => n.message)).toContain(
+			"Inline Pi: couldn't place the answer in the canvas node",
+		);
+
+		warnSpy.mockRestore();
+	});
+});

@@ -6,7 +6,7 @@ import {
 	type CalloutHandle,
 } from "../callout-streaming";
 import { PiSettleResult } from "../pi-client";
-import { Editor, TFile as MockTFile } from "../__mocks__/obsidian";
+import { Editor, Notice, TFile as MockTFile } from "../__mocks__/obsidian";
 
 // --- Mock helper functions ---
 
@@ -384,6 +384,34 @@ describe("CalloutInstance queued lifecycle (#29)", () => {
 });
 
 // --- Tests for buildErrorCallout ---
+
+describe("replaceWithCallout loud failure (#19)", () => {
+	it("warns and notifies when the callout cannot be found instead of returning silently", () => {
+		// Simulates the dead-editor case: the handle's editor no longer holds
+		// the pending callout, so findCalloutBlock misses.
+		const editor = makeEditorWithLines(["unrelated text"]);
+		const handle = insertPendingCallout(editor, makeTFile("note.md"), "Missing query");
+		const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+		Notice.reset();
+
+		handle.onSettle({
+			finalContent: "answer",
+			aborted: false,
+			error: false,
+			stopReason: "stop",
+		} as any);
+
+		expect(warnSpy).toHaveBeenCalledOnce();
+		expect(String(warnSpy.mock.calls[0][0])).toContain("could not find the callout");
+		expect(Notice.instances.map((n) => n.message)).toContain(
+			"Inline Pi: couldn't update the callout — the editor may no longer be open",
+		);
+		// Only the initial pending insert touched the editor — the reply did not.
+		expect((editor.replaceRange as any)).toHaveBeenCalledOnce();
+
+		warnSpy.mockRestore();
+	});
+});
 
 describe("buildErrorCallout", () => {
 	it("formats error callout correctly", () => {
