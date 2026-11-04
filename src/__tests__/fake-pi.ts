@@ -6,6 +6,14 @@
  *   "happy"   -> text deltas + message_end + agent_settled
  *   "error"   -> auto_retry_start/end + agent_settled with stopReason:error
  *   "abort"   -> waits for an abort request, then agent_settled{aborted:true}
+ *   "slow-abort" -> on abort: waits ~150ms, emits stray session-scoped
+ *                wind-down events (tool_execution_*, message_start), then the
+ *                run's agent_settled{aborted:true} (#20 drain-state tests)
+ *   "never-settle" -> on abort: ignores it entirely (no agent_settled), so the
+ *                client's drain grace must release the queue (#20)
+ *   "delayed happy" -> happy, but the reply lands ~200ms after `started`, so the
+ *                run is still in flight when an aborted run's late
+ *                agent_settled arrives (#20 — that is the mis-settle window)
  *   "dialog"  -> extension_ui_request confirm, then text delta + settle
  *   "handled" -> disposition:handled (no stream, no agent_settled)
  *   "u2028"   -> text_delta containing U+2028 inside the JSON string
@@ -21,11 +29,18 @@ function send(obj: unknown) {
 
 let buffer = "";
 let activeId: string | null = null;
+// Scenario of the run currently in flight, so the abort handler can pick the
+// right acknowledgement behavior (#20 drain-state tests).
+let activeScenario: string | null = null;
 
 function readScenario(message: string): string {
 	const m = message.toLowerCase();
 	if (m.includes("handled")) return "handled";
 	if (m.includes("error")) return "error";
+	// Check the drain scenarios before "abort" — they contain that substring.
+	if (m.includes("slow-abort")) return "slowAbort";
+	if (m.includes("never-settle")) return "neverSettle";
+	if (m.includes("delayed")) return "delayedHappy";
 	if (m.includes("abort")) return "abort";
 	if (m.includes("dialog")) return "dialog";
 	if (m.includes("tools")) return "tools";
@@ -34,8 +49,7 @@ function readScenario(message: string): string {
 	return "happy";
 }
 
-function runHappy(id: string) {
-	send({ id, type: "response", data: { disposition: "started" } });
+function runHappyReply(id: string) {
 	send({
 		id,
 		type: "message_update",
@@ -49,6 +63,18 @@ function runHappy(id: string) {
 	send({ id, type: "message_end", message: "Hello world" });
 	send({ id, type: "agent_settled", stopReason: "stop" });
 	activeId = null;
+}
+
+function runHappy(id: string) {
+	send({ id, type: "response", data: { disposition: "started" } });
+	runHappyReply(id);
+}
+
+function runDelayedHappy(id: string) {
+	// `started` now, the reply 200ms later: a run that is genuinely in flight
+	// while another run's late agent_settled could land on it (#20).
+	send({ id, type: "response", data: { disposition: "started" } });
+	setTimeout(() => runHappyReply(id), 200);
 }
 
 function runError(id: string) {
@@ -183,6 +209,7 @@ function handlePrompt(msg: any) {
 	const id = String(msg.id ?? "unknown");
 	activeId = id;
 	const scenario = readScenario(String(msg.message ?? ""));
+	activeScenario = scenario;
 	switch (scenario) {
 		case "handled":
 			send({ id, type: "response", data: { disposition: "handled" } });
@@ -208,6 +235,15 @@ function handlePrompt(msg: any) {
 			send({ id, type: "response", data: { disposition: "started" } });
 			// activeId stays set until abort is received
 			break;
+		case "slowAbort":
+		case "neverSettle":
+			// Started, then the run hangs until the client aborts it. The abort
+			// handler decides how (and whether) to acknowledge that abort.
+			send({ id, type: "response", data: { disposition: "started" } });
+			break;
+		case "delayedHappy":
+			runDelayedHappy(id);
+			break;
 		default:
 			runHappy(id);
 	}
@@ -229,10 +265,30 @@ process.stdin.on("data", (chunk) => {
 		if (msg.type === "prompt") {
 			handlePrompt(msg);
 		} else if (msg.type === "abort") {
-			if (activeId) {
-				send({ id: activeId, type: "agent_settled", aborted: true });
-				activeId = null;
+			if (!activeId) continue;
+			const abortedId = activeId;
+			if (activeScenario === "neverSettle") {
+				// Pretend pi ignored the abort — no agent_settled ever arrives, so the
+				// client's drain grace period has to release the queue (#20).
+				continue;
 			}
+			if (activeScenario === "slowAbort") {
+				// Slow wind-down: the aborted run keeps emitting session-scoped events
+				// (no prompt id, exactly as real pi does) and only then acknowledges
+				// the abort. With the queue held, these strays land on nobody (#20).
+				setTimeout(() => {
+					send({ type: "tool_execution_start", toolCallId: "late-1", toolName: "read", args: {} });
+					send({ type: "tool_execution_end", toolCallId: "late-1", toolName: "read", result: "", isError: false, durationMs: 1 });
+					send({ type: "message_start" });
+					send({ id: abortedId, type: "agent_settled", aborted: true });
+					activeId = null;
+					activeScenario = null;
+				}, 150);
+				continue;
+			}
+			send({ id: abortedId, type: "agent_settled", aborted: true });
+			activeId = null;
+			activeScenario = null;
 		}
 	}
 });
