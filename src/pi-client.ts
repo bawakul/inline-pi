@@ -315,6 +315,21 @@ export class PiClient {
 		}
 	}
 
+	/**
+	 * Update the response timeout used for the *next* armed watchdog. A
+	 * prompt already running keeps its existing timer. Lets the settings tab
+	 * push a live change without a full plugin reload (issue #40, mirroring
+	 * the #4 working-directory fix).
+	 */
+	setTimeoutMs(ms: number): void {
+		if (!Number.isFinite(ms) || ms <= 0) return;
+		if (ms !== this.opts.timeoutMs) {
+			this.log(`setTimeoutMs: ${this.opts.timeoutMs}ms -> ${ms}ms`);
+			debugLog(`setTimeoutMs: ${this.opts.timeoutMs}ms -> ${ms}ms`);
+			this.opts.timeoutMs = ms;
+		}
+	}
+
 	private log(msg: string): void {
 		this.opts.onLog(`[pi-client] ${msg}`);
 	}

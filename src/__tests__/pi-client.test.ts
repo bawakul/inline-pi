@@ -525,6 +525,31 @@ describe("PiClient", () => {
 		});
 	});
 
+	describe("setTimeoutMs (issue #40)", () => {
+		it("pushes a live settings change to the next armed watchdog", async () => {
+			// Client constructed with a huge timeout; the live push is what arms
+			// the real 80ms watchdog. If propagation is broken this test hangs to
+			// its internal awaitSettle limit and fails.
+			const { client, awaitSettle } = createClientWithSettleTracking({
+				timeoutMs: 60_000,
+				drainGraceMs: 100,
+			});
+			client.setTimeoutMs(80);
+
+			const id = await client.prompt("never-settle please");
+			const result = await awaitSettle(id);
+			expect(result.error).toBe(true);
+			expect(result.errorMessage).toBe("Response timeout");
+		});
+
+		it("ignores non-positive values without touching the timeout", () => {
+			const { client } = createClientWithSettleTracking({ timeoutMs: 5000 });
+			expect(() => client.setTimeoutMs(0)).not.toThrow();
+			expect(() => client.setTimeoutMs(-1)).not.toThrow();
+			expect(() => client.setTimeoutMs(Number.NaN)).not.toThrow();
+		});
+	});
+
 	describe("abort() when no active run", () => {
 		it("resolves immediately", async () => {
 			const client = new PiClient({

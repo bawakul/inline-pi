@@ -29,4 +29,5 @@ export interface InlinePiPluginLike {
 	saveSettings(): Promise<void>;
 	/** Push a settings working-directory change to the running PiClient (issue #4). */
 	setPiWorkingDirectory?(dir: string): void;
+	setPiTimeoutSecs?(secs: number): void;
 }

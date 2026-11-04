@@ -62,6 +62,9 @@ export class InlinePiSettingTab extends PluginSettingTab {
 						if (!isNaN(parsed) && parsed > 0) {
 							this.plugin.settings.timeoutSecs = parsed;
 							await this.plugin.saveSettings();
+							// Push live to the running PiClient so the next ;; arms its
+							// watchdog with the new value (issue #40, mirrors the cwd push).
+							this.plugin.setPiTimeoutSecs?.(parsed);
 						}
 					})
 			);

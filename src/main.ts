@@ -194,6 +194,16 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		debugLog(`setPiWorkingDirectory: ${effective || "(vault root)"}`);
 	}
 
+	/**
+	 * Push a settings timeout change to the running PiClient so the next ;;
+	 * arms its watchdog with the new value without a plugin reload. See
+	 * issue #40 and PiClient.setTimeoutMs.
+	 */
+	setPiTimeoutSecs(secs: number): void {
+		this.services.piClient?.setTimeoutMs(secs * 1000);
+		debugLog(`setPiTimeoutSecs: ${secs}s`);
+	}
+
 	private getVaultPath(): string {
 		const adapter = this.app.vault.adapter;
 		// getBasePath() exists for local vaults; return empty for cloud vaults
