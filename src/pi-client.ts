@@ -37,6 +37,12 @@ export interface PiClientOptions {
 	workingDirectory: string;
 	/** Prompt -> agent_settled watchdog in ms. 0 disables. */
 	timeoutMs: number;
+	/**
+	 * How long the queue is held after a response timeout while waiting for the
+	 * aborted run's `agent_settled` (#20). Injectable for tests; not a
+	 * user-facing setting. Defaults to DEFAULT_DRAIN_GRACE_MS.
+	 */
+	drainGraceMs?: number;
 	/** Optional explicit pi executable; otherwise resolved from PATH. */
 	piCommand?: string | null;
 	/**
@@ -81,6 +87,8 @@ interface PromptRequest {
 }
 
 const DEFAULT_PI_TIMEOUT_MS = 300_000;
+/** Default queue-hold window after a timeout abort (#20). Local aborts ack in <200ms. */
+const DEFAULT_DRAIN_GRACE_MS = 2_000;
 const PATH_PROBE_TIMEOUT_MS = 5_000;
 const SHELL_PATH_SENTINEL_START = "__PI_PATH_S__";
 const SHELL_PATH_SENTINEL_END = "__PI_PATH_E__";
@@ -269,11 +277,16 @@ export class PiClient {
 	private readBuffer = "";
 	private shuttingDown = false;
 	private piPath: string | null = null;
+	/** True between a timeout abort and the aborted run's agent_settled (#20). */
+	private draining = false;
+	/** Fallback timer that releases the queue if pi never acknowledges the abort. */
+	private drainTimer: NodeJS.Timeout | null = null;
 
 	constructor(opts: PiClientOptions) {
 		this.opts = {
 			workingDirectory: opts.workingDirectory,
 			timeoutMs: opts.timeoutMs ?? DEFAULT_PI_TIMEOUT_MS,
+			drainGraceMs: opts.drainGraceMs ?? DEFAULT_DRAIN_GRACE_MS,
 			piCommand: opts.piCommand ?? null,
 			spawnCommand: opts.spawnCommand ?? spawn,
 			onStatusChange: opts.onStatusChange ?? (() => {}),
@@ -625,6 +638,14 @@ export class PiClient {
 	}
 
 	private handleAgentSettled(msg: any): void {
+		// A late agent_settled from a timed-out run (#20): consume it and release
+		// the held queue. The timed-out prompt already settled with the timeout
+		// error, so this settle carries nothing we still need — and it must never
+		// reach a prompt that was promoted in the meantime.
+		if (this.draining) {
+			this.endDrain("late agent_settled");
+			return;
+		}
 		if (!this.active) return;
 		const aborted = msg.aborted === true;
 		const stopReason = msg.stopReason ?? this.active.stopReason;
@@ -677,7 +698,52 @@ export class PiClient {
 		this.dispatchNext();
 	}
 
+	/**
+	 * Leave the drain state and release the held queue (#20).
+	 * Called when the aborted run's agent_settled finally arrives.
+	 */
+	private endDrain(reason: string): void {
+		if (this.drainTimer) {
+			clearTimeout(this.drainTimer);
+			this.drainTimer = null;
+		}
+		if (!this.draining) return;
+		this.draining = false;
+		this.log(`drain complete (${reason}); releasing queue`);
+		void this.dispatchNext();
+	}
+
+	/**
+	 * Drop the drain state without dispatching. A dead client (process exit,
+	 * shutdown) must never promote a prompt from a dangling drain timer.
+	 */
+	private clearDrain(): void {
+		if (this.drainTimer) {
+			clearTimeout(this.drainTimer);
+			this.drainTimer = null;
+		}
+		this.draining = false;
+	}
+
+	/**
+	 * Fallback for a pi that never acknowledges the abort: release the queue
+	 * anyway, loudly. The residual race (a *later* agent_settled can still hit the
+	 * freshly promoted prompt) is accepted and bounded by drainGraceMs.
+	 */
+	private onDrainGraceExpired(promptId: string): void {
+		this.drainTimer = null;
+		this.draining = false;
+		this.log(
+			`drain grace expired for ${promptId} after ${this.opts.drainGraceMs}ms; ` +
+				`releasing queue — pi did not acknowledge abort`
+		);
+		debugLog(`drain grace expired ${promptId} after ${this.opts.drainGraceMs}ms`);
+		void this.dispatchNext();
+	}
+
 	private failActiveAndQueued(err: Error): void {
+		// No dispatch can follow a dead client: kill any in-flight drain timer.
+		this.clearDrain();
 		if (this.active) {
 			const req = this.active;
 			this.active = null;
@@ -756,7 +822,11 @@ export class PiClient {
 	}
 
 	private async dispatchNext(): Promise<void> {
-		if (this.active || this.queue.length === 0) return;
+		// `draining` (#20): the active run timed out and was aborted, but pi has not
+		// acknowledged it yet. Promoting the next prompt now lets the old run's late
+		// agent_settled / stray tool events settle the new prompt. Hold until the
+		// late agent_settled arrives (endDrain) or the grace period expires.
+		if (this.active || this.draining || this.queue.length === 0) return;
 		if (this.shuttingDown) {
 			this.failActiveAndQueued(new Error("PiClient is shutting down"));
 			return;
@@ -778,6 +848,13 @@ export class PiClient {
 				this.log(`prompt ${req.id} timed out after ${this.opts.timeoutMs}ms; aborting`);
 				debugLog(`timeout ${req.id} after ${this.opts.timeoutMs}ms`);
 				this.send({ type: "abort" });
+				// Hold the queue until pi acknowledges the abort (#20). The timed-out
+				// prompt still settles red immediately; only the *next* dispatch waits.
+				this.draining = true;
+				this.drainTimer = setTimeout(
+					() => this.onDrainGraceExpired(req.id),
+					this.opts.drainGraceMs
+				);
 				this.settleActive({
 					finalContent: req.buffer,
 					aborted: false,
@@ -792,6 +869,8 @@ export class PiClient {
 
 	/** Cancel the active prompt. Resolves once the aborted settlement arrives. */
 	async abort(): Promise<void> {
+		// During a drain (post-timeout) the abort has already been sent and there is
+		// no active prompt left to wait on — resolve immediately (#20).
 		if (!this.active) return;
 		return new Promise((resolve, reject) => {
 			const req = this.active;
@@ -820,6 +899,7 @@ export class PiClient {
 	/** Close stdin for orderly shutdown and wait for process exit. */
 	async shutdown(timeoutMs = 2_000): Promise<void> {
 		this.shuttingDown = true;
+		this.clearDrain();
 		this.failActiveAndQueued(new Error("PiClient is shutting down"));
 
 		const proc = this.process;
