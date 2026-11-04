@@ -73,16 +73,28 @@ export function findCalloutRange(
 	const lineCount = editor.lineCount();
 	const markers = Array.isArray(marker) ? marker : [marker];
 
-	// Full-document scan for the exact marker
+	// A full-header marker (built from a query, no trailing space — e.g.
+	// `> [!claude] fix`) must match the line EXACTLY: startsWith would alias a
+	// longer query with it as a prefix ("fix" vs "fix typo", #36 review finding 2).
+	// A prefix marker (trailing space) keeps startsWith semantics.
+	const isMatch = (line: string, m: string): boolean =>
+		m.endsWith(" ") ? line.startsWith(m) : line === m;
+
+	// Collect ALL matching lines, then prefer the one closest to nearLine
+	// (#36 review finding 1: first-match-wins rewrites the WRONG callout when
+	// the same query is asked twice — one active, one queued — inverting their
+	// looks mid-run). Ties go to the lower line. Callers that pass no
+	// nearLine get 0, which selects the first match as before.
 	let markerLine = -1;
+	let bestDistance = Infinity;
 	for (let i = 0; i < lineCount; i++) {
 		const line = editor.getLine(i);
-		if (markers.some((m) => line.startsWith(m))) {
-			markerLine = i;
-			// Don't break — if there are multiple matches, prefer the one
-			// closest to nearLine. But pending callouts should be unique
-			// since they contain the query text.
-			break;
+		if (markers.some((m) => isMatch(line, m))) {
+			const distance = Math.abs(i - nearLine);
+			if (distance < bestDistance) {
+				bestDistance = distance;
+				markerLine = i;
+			}
 		}
 	}
 

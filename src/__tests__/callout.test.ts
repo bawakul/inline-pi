@@ -220,7 +220,7 @@ describe("findCalloutBlock", () => {
 		expect(result).toEqual({ from: 1, to: 1 });
 	});
 
-	it("matches either header type for the same query, first occurrence wins", () => {
+	it("matches either header type for the same query, closest to nearLine wins", () => {
 		const lines = [
 			"> [!claude-queued] same query",
 			"",
@@ -228,6 +228,32 @@ describe("findCalloutBlock", () => {
 		];
 		const result = findCalloutBlock(makeEditor(lines), "same query", 0);
 		expect(result).toEqual({ from: 0, to: 0 });
+	});
+
+	it("duplicate query: picks the instance nearest nearLine, not the first in the document", () => {
+		// #36 review finding 1: same question asked twice — line 2 active,
+		// line 6 queued. The queued instance's rewrite (nearLine 6) must
+		// target line 6, not invert the active one at line 2.
+		const lines = [
+			"some text",
+			"> [!claude] dup query",
+			"> **Pi:** in flight",
+			"",
+			"> [!claude-queued] dup query",
+		];
+		const editor = makeEditor(lines);
+		const queuedLook = findCalloutBlock(editor, "dup query", 4);
+		expect(queuedLook).toEqual({ from: 4, to: 4 });
+		const activeLook = findCalloutBlock(editor, "dup query", 1);
+		expect(activeLook).toEqual({ from: 1, to: 2 });
+	});
+
+	it("query that prefixes another query does not alias it (exact header match)", () => {
+		// #36 review finding 2: findCalloutBlock(editor, "fix") must NOT
+		// match `> [!claude] fix typo`.
+		const lines = ["> [!claude] fix typo"];
+		expect(findCalloutBlock(makeEditor(lines), "fix")).toBeNull();
+		expect(findCalloutBlock(makeEditor(lines), "fix typo")).toEqual({ from: 0, to: 0 });
 	});
 
 	it("returns the correct end-of-block for a queued callout with body", () => {
