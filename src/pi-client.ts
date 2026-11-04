@@ -825,7 +825,7 @@ export class PiClient {
 			// (The #20 drain state folds into this predicate on rebase — during a
 			// drain the queue is also held.) Cold-start spawn delay is NOT marked
 			// queued: pi is booting, not waiting on another run.
-			const willQueue = this.active !== null;
+			const willQueue = this.active !== null || this.draining;
 			if (willQueue) req.onQueued?.();
 			this.dispatchNext();
 		});
