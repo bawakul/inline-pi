@@ -38,6 +38,25 @@
   background-color: transparent;
 }
 
+/* Queued look (#32 → Variant A — dim + hourglass, chosen from the
+   reaction prototype 2026-11-04). Theme-independent by the same reasoning
+   as claude-done above: explicit dashed accent + grey fill so "waiting"
+   reads in Typewriter/Dawn, which render base callout tints faintly or
+   strip borders entirely. No spin — the claude-spin rule is scoped to
+   [data-callout="claude"] only. */
+.callout[data-callout="claude-queued"] {
+  --callout-color: 150, 150, 150;
+  --callout-icon: hourglass;
+  opacity: 0.65;
+  border-left: 3px dashed rgba(150, 150, 150, 0.5);
+  background-color: rgba(150, 150, 150, 0.08);
+}
+
+.callout[data-callout="claude-queued"] .callout-content {
+  /* Let the container's grey fill show through (theme-independent). */
+  background-color: transparent;
+}
+
 .inline-claude-instructions {
   max-height: 300px;
   overflow-y: auto;
