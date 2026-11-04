@@ -20,6 +20,33 @@ function makeEditorWithLines(lines: string[]) {
 	} as any;
 }
 
+/**
+ * A *stateful* editor mock: `replaceRange` actually mutates the backing line
+ * array. Required for any test that exercises header rewrites — a static
+ * `getLine` would keep returning the old header and hide the rewrite from
+ * `findCalloutBlock`, so the assertions would pass (or fail) for the wrong
+ * reason. Line-level replacement only; `ch` is ignored, which is all these
+ * callouts ever exercise.
+ */
+function makeStatefulEditor(lines: string[]) {
+	return {
+		getLine: (n: number) => lines[n] ?? "",
+		lineCount: () => lines.length,
+		replaceRange: vi.fn(
+			(
+				replacement: string,
+				from: { line: number; ch: number },
+				to?: { line: number; ch: number }
+			) => {
+				const toLine = to ? to.line : from.line;
+				lines.splice(from.line, toLine - from.line + 1, ...replacement.split("\n"));
+			}
+		),
+		getCursor: vi.fn(() => ({ line: 0, ch: 0 })),
+		setCursor: vi.fn(),
+	} as any;
+}
+
 function makeTFile(path: string = "test.md"): TFile {
 	const f = new MockTFile() as TFile;
 	f.path = path;
@@ -122,22 +149,22 @@ describe("CalloutInstance (no-streaming)", () => {
 	});
 
 	it("handles queued state", () => {
-		const editor = makeEditorWithLines([
-			"> [!claude] Queued test",
-			"",
-			"",
-		]);
+		const lines = ["> [!claude] Queued test", "", ""];
+		const editor = makeStatefulEditor(lines);
 		const file = makeTFile();
 		const handle = insertPendingCallout(editor, file, "Queued test");
 
 		(handle as any).wireSettle(() => {});
 		(handle as any).wireAbort(() => {});
 
-		// Mark as queued
+		// Mark as queued — this rewrites the header in place (#29).
 		handle.onQueued();
+		expect(lines[0]).toBe("> [!claude-queued] Queued test");
 
-		// Then receive deltas
+		// Deltas still do not touch the editor while queued (T42 no-streaming).
+		const callsAfterQueue = (editor.replaceRange as any).mock.calls.length;
 		handle.onDelta("Processing queued");
+		expect((editor.replaceRange as any).mock.calls.length).toBe(callsAfterQueue);
 	});
 
 	it("handles aborted state", () => {
@@ -267,6 +294,92 @@ describe("CalloutInstance (no-streaming)", () => {
 		expect(settleCallback).toHaveBeenCalledOnce();
 		// After settle, callout should be:
 		// "> [!claude-done]+ Empty test\n> **Pi:** "
+	});
+});
+
+// --- Tests for the queued lifecycle (#29) ---
+
+describe("CalloutInstance queued lifecycle (#29)", () => {
+	const green = {
+		finalContent: "All done.",
+		aborted: false,
+		error: false,
+		stopReason: "stop",
+	};
+
+	it("onQueued rewrites the header to the queued variant", () => {
+		const lines = ["> [!claude] Queued test", "", ""];
+		const editor = makeStatefulEditor(lines);
+		const handle = insertPendingCallout(editor, makeTFile(), "Queued test");
+
+		expect(lines[0]).toBe("> [!claude] Queued test");
+		handle.onQueued();
+		expect(lines[0]).toBe("> [!claude-queued] Queued test");
+	});
+
+	it("onActive flips a queued header back to the pending header", () => {
+		const lines = ["> [!claude] Queued test", "", ""];
+		const editor = makeStatefulEditor(lines);
+		const handle = insertPendingCallout(editor, makeTFile(), "Queued test");
+
+		handle.onQueued();
+		expect(lines[0]).toBe("> [!claude-queued] Queued test");
+		handle.onActive();
+		expect(lines[0]).toBe("> [!claude] Queued test");
+	});
+
+	it("runs the full lifecycle pending → queued → active → done", () => {
+		const lines = ["> [!claude] Lifecycle test", "", ""];
+		const editor = makeStatefulEditor(lines);
+		const handle = insertPendingCallout(editor, makeTFile(), "Lifecycle test");
+
+		handle.onQueued();
+		handle.onActive();
+		handle.onSettle(green as any);
+
+		expect(lines[0]).toBe("> [!claude-done]+ Lifecycle test");
+		expect(lines[1]).toBe("> **Pi:** All done.");
+	});
+
+	it("settles correctly from the queued state (dual-marker lookup)", () => {
+		// The queued header is a different callout type; findCalloutBlock must
+		// still locate the block or the settle would silently no-op.
+		const lines = ["> [!claude] Queued settle", "", ""];
+		const editor = makeStatefulEditor(lines);
+		const handle = insertPendingCallout(editor, makeTFile(), "Queued settle");
+
+		handle.onQueued();
+		expect(lines[0]).toBe("> [!claude-queued] Queued settle");
+		handle.onSettle(green as any);
+
+		expect(lines[0]).toBe("> [!claude-done]+ Queued settle");
+		expect(lines[1]).toBe("> **Pi:** All done.");
+	});
+
+	it("onQueued after settle is a no-op", () => {
+		const lines = ["> [!claude] Late queue", "", ""];
+		const editor = makeStatefulEditor(lines);
+		const handle = insertPendingCallout(editor, makeTFile(), "Late queue");
+
+		handle.onSettle(green as any);
+		const callsAfterSettle = (editor.replaceRange as any).mock.calls.length;
+
+		handle.onQueued();
+
+		expect((editor.replaceRange as any).mock.calls.length).toBe(callsAfterSettle);
+		expect(lines[0]).toBe("> [!claude-done]+ Late queue");
+	});
+
+	it("onActive when never queued is a no-op", () => {
+		const lines = ["> [!claude] Never queued", "", ""];
+		const editor = makeStatefulEditor(lines);
+		const handle = insertPendingCallout(editor, makeTFile(), "Never queued");
+
+		handle.onActive();
+
+		// Only the initial insert — no header rewrite.
+		expect(editor.replaceRange).toHaveBeenCalledOnce();
+		expect(lines[0]).toBe("> [!claude] Never queued");
 	});
 });
 

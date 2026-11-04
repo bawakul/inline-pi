@@ -1,6 +1,6 @@
 import type { Editor } from "obsidian";
 import type { PiClient } from "./pi-client";
-import { findCalloutBlock, buildCalloutHeader } from "./callout";
+import { findCalloutBlock, buildCalloutHeader, buildQueuedCalloutHeader } from "./callout";
 
 /**
  * Abort-watcher for pending callouts.
@@ -129,6 +129,7 @@ export class AbortWatcher {
 		}
 
 		const expectedHeader = buildCalloutHeader(query);
+		const queuedHeader = buildQueuedCalloutHeader(query);
 		const range = findCalloutBlock(editor, query);
 		
 		if (!range) {
@@ -140,9 +141,12 @@ export class AbortWatcher {
 			return false;
 		}
 
-		// Check if the header line matches exactly
+		// Check if the header line matches exactly. Both canonical headers are
+		// accepted: a `> [!claude-queued] {query}` header is a legitimate
+		// in-lifecycle state (#29), not a user edit — aborting on it would kill
+		// every queued prompt the moment the watcher is wired up.
 		const headerLine = editor.getLine(range.from);
-		if (headerLine !== expectedHeader) {
+		if (headerLine !== expectedHeader && headerLine !== queuedHeader) {
 			console.log(`[abort-watcher] Header changed for ${calloutId}, aborting`);
 			void this.piClient?.abort().catch(() => {
 				console.warn(`[abort-watcher] Abort failed for ${calloutId}`);

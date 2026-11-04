@@ -152,10 +152,16 @@ export class InlinePiSuggest extends EditorSuggest<string> {
 		// 5. Enqueue the prompt with pi-client. T42: no onDelta — the callout holds
 		// its pending header until settle; live activity goes to the status bar via
 		// the plugin-level onActivity callback wired in main.ts.
+		// #29: onQueued flips the callout to the queued look while it waits behind
+		// a busy run; onActive flips it back when pi accepts the run (the promise
+		// below resolves on disposition "started"/"handled", which is exactly
+		// "pi picked it up").
 		piClient.prompt(payload, {
+			onQueued: () => handle.onQueued(),
 			onSettle: (result: any) => handle.onSettle(result),
 		})
 			.then((id: string) => {
+				handle.onActive();
 				console.log(`Inline Pi: prompt ${id} accepted by pi`);
 			})
 			.catch((err: Error) => {

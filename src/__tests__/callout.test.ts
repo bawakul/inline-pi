@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
 	buildCalloutHeader,
+	buildQueuedCalloutHeader,
 	insertCallout,
 	buildResponseCallout,
 	findCalloutRange,
@@ -31,6 +32,18 @@ describe("buildCalloutHeader", () => {
 		expect(buildCalloutHeader("  spaced  ")).toBe(
 			"> [!claude]   spaced  "
 		);
+	});
+});
+
+describe("buildQueuedCalloutHeader", () => {
+	it("formats the queued variant with the same title", () => {
+		expect(buildQueuedCalloutHeader("hello")).toBe(
+			"> [!claude-queued] hello"
+		);
+	});
+
+	it("handles empty query", () => {
+		expect(buildQueuedCalloutHeader("")).toBe("> [!claude-queued] ");
 	});
 });
 
@@ -184,7 +197,7 @@ describe("findCalloutBlock", () => {
 		expect(result).toBeNull();
 	});
 
-	it("finds callout anywhere in document regardless of nearLine", () => {
+	it("finds a callout anywhere in document regardless of nearLine", () => {
 		const lines = [
 			...Array(100).fill("filler"),
 			"> [!claude] my question",
@@ -193,6 +206,38 @@ describe("findCalloutBlock", () => {
 		];
 		const result = findCalloutBlock(makeEditor(lines), "my question", 0);
 		expect(result).toEqual({ from: 100, to: 101 });
+	});
+
+	// --- #29 queued header variant ---
+
+	it("finds a callout whose header is the queued variant", () => {
+		const lines = [
+			"intro",
+			"> [!claude-queued] my question",
+			"",
+		];
+		const result = findCalloutBlock(makeEditor(lines), "my question", 0);
+		expect(result).toEqual({ from: 1, to: 1 });
+	});
+
+	it("matches either header type for the same query, first occurrence wins", () => {
+		const lines = [
+			"> [!claude-queued] same query",
+			"",
+			"> [!claude] same query",
+		];
+		const result = findCalloutBlock(makeEditor(lines), "same query", 0);
+		expect(result).toEqual({ from: 0, to: 0 });
+	});
+
+	it("returns the correct end-of-block for a queued callout with body", () => {
+		const lines = [
+			"> [!claude-queued] queued q",
+			"> body line",
+			"not a callout",
+		];
+		const result = findCalloutBlock(makeEditor(lines), "queued q", 0);
+		expect(result).toEqual({ from: 0, to: 1 });
 	});
 });
 
