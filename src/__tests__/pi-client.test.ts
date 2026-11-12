@@ -583,6 +583,55 @@ describe("PiClient", () => {
 		});
 	});
 
+	describe("session args (issue #42)", () => {
+		/** Capture the args of every spawn while still running the fake pi harness. */
+		function createCapturingClient(userOptions: Partial<PiClientOptions> = {}): {
+			client: PiClient;
+			calls: { command: string; args: readonly string[] }[];
+		} {
+			const calls: { command: string; args: readonly string[] }[] = [];
+			const spawnCommand: SpawnCommand = (command, args, options) => {
+				calls.push({ command, args: [...args] });
+				const fakePiPath = require.resolve("./fake-pi.js");
+				const proc = spawn("node", [fakePiPath], { ...options, cwd: __dirname });
+				spawnedProcesses.push(proc);
+				return proc;
+			};
+			const client = new PiClient({
+				workingDirectory: __dirname,
+				timeoutMs: 0,
+				...userOptions,
+				spawnCommand,
+			});
+			return { client, calls };
+		}
+
+		it("passes --session-id <id> and omits --no-session when sessionId is set", async () => {
+			const { client, calls } = createCapturingClient({ sessionId: "inline-pi-test-vault-a1b2c3" });
+
+			await client.prompt("say happy");
+			await client.shutdown();
+
+			expect(calls.length).toBe(1);
+			const args = calls[0].args;
+			const flagIndex = args.indexOf("--session-id");
+			expect(flagIndex).toBeGreaterThan(-1);
+			expect(args[flagIndex + 1]).toBe("inline-pi-test-vault-a1b2c3");
+			expect(args).not.toContain("--no-session");
+		});
+
+		it("falls back to --no-session when no sessionId is set", async () => {
+			const { client, calls } = createCapturingClient();
+
+			await client.prompt("say happy");
+			await client.shutdown();
+
+			expect(calls.length).toBe(1);
+			expect(calls[0].args).toContain("--no-session");
+			expect(calls[0].args).not.toContain("--session-id");
+		});
+	});
+
 	describe("spawn error handling", () => {
 		it("handles spawn errors gracefully", async () => {
 			const logCalls: string[] = [];

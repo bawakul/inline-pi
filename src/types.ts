@@ -9,6 +9,12 @@ export interface InlinePiSettings {
 	enableDebugLog: boolean;
 	/** Optional explicit pi executable; otherwise resolved from PATH. */
 	piCommand?: string;
+	/**
+	 * Stable pi session id for the vault's `;;` thread (issue #42). Generated on
+	 * first load and persisted; undefined means ephemeral (`--no-session`)
+	 * threads — the no-rebuild kill switch.
+	 */
+	sessionId?: string;
 }
 
 export const DEFAULT_SETTINGS: InlinePiSettings = {
@@ -17,6 +23,7 @@ export const DEFAULT_SETTINGS: InlinePiSettings = {
 	timeoutSecs: 300,
 	enableDebugLog: true,
 	piCommand: undefined,
+	sessionId: undefined,
 };
 
 /**

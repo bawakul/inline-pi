@@ -45,6 +45,9 @@ export class Notice {
 export class Plugin {
 	app: App;
 	manifest: any;
+	/** Test helper — commands registered via addCommand (real Obsidian resolves
+	 *  palette entries itself; tests assert ids/names/callbacks here). */
+	commands: any[] = [];
 	constructor(app: App, manifest: any) {
 		this.app = app;
 		this.manifest = manifest;
@@ -55,6 +58,10 @@ export class Plugin {
 	async saveData(_data: any): Promise<void> {}
 	registerEditorSuggest(_suggest: any): void {}
 	addSettingTab(_tab: any): void {}
+	addCommand(command: any): any {
+		this.commands.push(command);
+		return command;
+	}
 	registerInterval(id: number): number {
 		return id;
 	}
@@ -99,6 +106,13 @@ export class App {
  * obsidian module.
  */
 export class Vault {
+	name = "Test Vault";
+	/** Local-vault adapter shape used by main.ts getVaultPath(). */
+	adapter: any = { getBasePath: () => "/tmp/test-vault" };
+	getName(): string {
+		return this.name;
+	}
+
 	// Test-private file store keyed by path.
 	private files: Map<string, { file: TFile; content: string }> = new Map();
 
