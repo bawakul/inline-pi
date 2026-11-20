@@ -19,6 +19,7 @@ A port of [inline-claude](https://github.com/bawakul/inline-claude) to the pi ag
 - A pending callout marks the question; the status bar shows what pi is doing (spawning, thinking, running a tool, streaming)
 - The note around your cursor travels with the question, so answers are about what you're actually writing
 - The answer settles in as a collapsible callout titled with your question
+- The thread is persistent — reload Obsidian, reopen the vault, kill the pi process: the next `;;` continues the same conversation. **Inline Pi: Start fresh thread** (command palette) sheds a stale thread without losing it — the old one stays on disk
 
 ## Requirements
 
@@ -45,6 +46,7 @@ Personal-tool stage: no releases, no installer, no plugin store. You build it.
 | Pi working directory | *(blank = vault root)* | Passed to pi as its cwd. Point it at a project folder and pi inherits that project's `AGENTS.md`, memory, skills, and MCP servers |
 | Response timeout | `300` s | How long to wait before timing out |
 | Enable debug log | on | Writes a full event trace to `~/.pi/inline-pi-debug.log` |
+| Session id | *hidden — generated on first load* | Stable id for this vault's `;;` thread (`data.json` → `sessionId`). Delete the key to fall back to one-shot sessions — no rebuild needed |
 
 ## What it writes to your vault
 
@@ -54,6 +56,7 @@ What does exist:
 
 - Plugin settings live in Obsidian's standard `.obsidian/plugins/inline-pi/data.json`
 - The debug log (if enabled) writes to `~/.pi/inline-pi-debug.log` — outside the vault
+- The vault's `;;` thread persists as a session file under `~/.pi/agent/sessions/…` (outside the vault, prefixed `inline-pi-`) — same place terminal pi sessions live, so old threads are resumable from the terminal with `pi --resume`
 
 ## Security & trust model
 
@@ -93,13 +96,15 @@ A running record of the build, in plain words. Root-causes and decision records 
 - **Oct 25 — quieter callouts.** Stopped streaming tokens into the note mid-thought; the answer now arrives whole, once it's done. Changing the working-directory setting now reaches a running client without a reload.
 - **Oct 28 — the question that never arrived.** The plugin was sending pi the instructions and the note context… but not the actual question. Fixed. Also retired "read the file first" — the note now travels inside the prompt itself, so a trivial question stays trivial.
 - **Oct 29 — telling the model what it is.** The instruction prefix still claimed the assistant was Claude and never mentioned it could search the web — asked about weather, it confabulated that it "runs without tools by design." Rewritten to state what it actually has. The manual test checklist passed in the test vault end to end. The answer callout also stopped introducing itself as Claude — the label reads **Pi:** now.
+- **Nov 20 — threads that stay.** `;;` conversations used to live only in RAM: restart Obsidian and the thread was gone, no trace on disk. Now every vault gets one persistent session — reloads, crashes and restarts all reattach to the same conversation, and a palette command starts a fresh thread without losing the old one (it stays on disk, resumable from the terminal).
 
 ## Rough edges
 
 Honest state, so nobody has to discover these the hard way:
 
 - `;;` in **canvas nodes is broken** — the suggestion popup dead-ends ("selectSuggestion called without a file") and nothing happens. It has never worked live — only unit tests ever exercised it ([#18](https://github.com/bawakul/inline-pi/issues/18))
-- Every `;;` starts a fresh session — no conversation continuation yet
+- A long-lived thread carries everything you've ever asked it in that vault — when it turns stale or heavy, **Inline Pi: Start fresh thread** sheds it (the old session file stays on disk)
+- Two Obsidian windows on the same vault would write to one session file — untested, no locking
 - A one-word question can still trigger a full agent run — slower than it should be
 - Personal-tool stage: no releases, no installer — clone, build, bring your own pi
 
