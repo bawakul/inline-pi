@@ -1,4 +1,4 @@
-import { Plugin, type EditorPosition, type TFile } from "obsidian";
+import { Notice, Plugin, type EditorPosition, type TFile } from "obsidian";
 import { PiClient, type PiClientOptions, type PiSettleResult, type PiActivity } from "./pi-client";
 import { AbortWatcher } from "./abort-watcher";
 import { InlinePiSuggest } from "./suggest";
@@ -6,6 +6,7 @@ import { InlinePiCanvasSuggest } from "./canvas-trigger";
 import { InlinePiSettingTab } from "./settings";
 import { DEFAULT_SETTINGS } from "./settings";
 import { debugLog } from "./debug-log";
+import { generateSessionId, isValidSessionId } from "./session-id";
 import type { InlinePiPluginLike, InlinePiSettings } from "./types";
 
 /**
@@ -24,6 +25,20 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 	async onload(): Promise<void> {
 		await this.loadSettings();
 
+		// #42: establish the vault's stable pi session id once, then persist it.
+		// A missing id means "ephemeral" (pre-#42 data.json) — generate one. An
+		// invalid id (hand-edited data.json) would make pi exit(1) on spawn, so
+		// regenerate rather than shipping it. Already-valid ids are never touched:
+		// the id is thread identity, and it must survive reloads.
+		if (!isValidSessionId(this.settings.sessionId)) {
+			const previous = this.settings.sessionId;
+			this.settings.sessionId = generateSessionId(this.app.vault.getName());
+			await this.saveSettings();
+			debugLog(
+				`onload sessionId ${previous ? `invalid (${previous}) -> ` : "missing -> "}${this.settings.sessionId}`,
+			);
+		}
+
 		// Wire settings tab
 		this.addSettingTab(new InlinePiSettingTab(this.app, this));
 
@@ -38,25 +53,25 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 		this.updateStatusBar("ready", 0);
 
 		// Initialize PiClient with single shared instance
-		const vaultPath = this.getVaultPath();
-		const clientOptions: PiClientOptions = {
-			workingDirectory:
-				this.settings.workingDirectory.trim() || vaultPath,
-			timeoutMs: this.settings.timeoutSecs * 1000,
-			onStatusChange: (status, depth) => this.onPiStatusChange(status, depth),
-			onDelta: (id, delta) => this.onPiDelta(id, delta),
-			onActivity: (activity) => this.onPiActivity(activity),
-			onSettle: (id, result) => this.onPiSettle(id, result),
-			onExit: (code, signal) => this.onPiExit(code, signal),
-			onLog: (msg) => this.onPiLog(msg),
-		};
+		const clientOptions: PiClientOptions = this.createPiClientOptions();
 		debugLog(`onload cwd=${clientOptions.workingDirectory} pi=${this.settings.piCommand || "auto"}`);
 		debugLog(`onload enableDebugLog=${this.settings.enableDebugLog}`);
+		debugLog(`onload sessionId=${this.settings.sessionId ?? "(none)"}`);
 		this.services.piClient = new PiClient(clientOptions);
 
 		// Initialize the abort-on-edit watcher (constructed after piClient exists).
 		this.services.abortWatcher = new AbortWatcher(this.services.piClient);
 		debugLog(`onload abortWatcher initialized`);
+
+		// #42/#24: shed a stale thread without losing it — the old session file
+		// stays on disk, the next ;; lazily spawns on the new id.
+		this.addCommand({
+			id: "fresh-pi-thread",
+			name: "Inline Pi: Start fresh thread (old thread kept on disk)",
+			callback: () => {
+				void this.startFreshThread();
+			},
+		});
 
 		console.log("Inline Pi plugin loaded");
 	}
@@ -83,6 +98,68 @@ export default class InlinePiPlugin extends Plugin implements InlinePiPluginLike
 	/** Expose the shared AbortWatcher so suggest/canvas can register pending callouts. */
 	getAbortWatcher(): AbortWatcher | null {
 		return this.services.abortWatcher;
+	}
+
+	/**
+	 * Build PiClient options from current settings. Used on load and whenever the
+	 * client is reconstructed (fresh thread). Settings changes that must apply to
+	 * a *live* client (cwd, timeout) stay on their dedicated setters.
+	 */
+	private createPiClientOptions(): PiClientOptions {
+		const vaultPath = this.getVaultPath();
+		return {
+			workingDirectory: this.settings.workingDirectory.trim() || vaultPath,
+			timeoutMs: this.settings.timeoutSecs * 1000,
+			sessionId: this.settings.sessionId,
+			onStatusChange: (status, depth) => this.onPiStatusChange(status, depth),
+			onDelta: (id, delta) => this.onPiDelta(id, delta),
+			onActivity: (activity) => this.onPiActivity(activity),
+			onSettle: (id, result) => this.onPiSettle(id, result),
+			onExit: (code, signal) => this.onPiExit(code, signal),
+			onLog: (msg) => this.onPiLog(msg),
+		};
+	}
+
+	/**
+	 * Start a fresh thread: regenerate the stable session id, shut the old pi
+	 * process down, and construct a fresh client/watcher on the new id. The old
+	 * session file is left intact on disk (issue #42, closes #24).
+	 *
+	 * Returns false when the request was refused (no client, or a run in flight).
+	 */
+	async startFreshThread(): Promise<boolean> {
+		const oldClient = this.services.piClient;
+		if (!oldClient) {
+			new Notice("Inline Pi: pi client is not ready — reload the plugin first.");
+			return false;
+		}
+		if (oldClient.isBusy()) {
+			new Notice(
+				"Inline Pi: pi is busy — wait for the current ;; to settle (or delete the pending callout to abort) before starting a fresh thread.",
+			);
+			return false;
+		}
+
+		const previousId = this.settings.sessionId;
+		this.settings.sessionId = generateSessionId(this.app.vault.getName());
+		await this.saveSettings();
+
+		// Drop pending callout bookkeeping, then recycle the process. shutdown()
+		// is terminal for a PiClient, so the client is reconstructed, not reused.
+		this.services.abortWatcher?.stopAll();
+		await oldClient.shutdown();
+
+		this.services.piClient = new PiClient(this.createPiClientOptions());
+		this.services.abortWatcher = new AbortWatcher(this.services.piClient);
+		this.updateStatusBar("ready", 0, "");
+
+		debugLog(
+			`fresh thread: sessionId ${previousId ?? "(none)"} -> ${this.settings.sessionId} (old session kept on disk)`,
+		);
+		new Notice(
+			`Inline Pi: fresh thread started. Previous session${previousId ? ` (${previousId})` : ""} is kept on disk.`,
+		);
+		return true;
 	}
 
 	// --- PiClient event handlers ---

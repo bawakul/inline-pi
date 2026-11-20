@@ -46,6 +46,13 @@ export interface PiClientOptions {
 	/** Optional explicit pi executable; otherwise resolved from PATH. */
 	piCommand?: string | null;
 	/**
+	 * Stable pi session id (issue #42). When set, spawn passes
+	 * `--session-id <id>` so pi reattaches to that session file (find-or-create).
+	 * When unset/empty, spawn keeps today's ephemeral `--no-session` behavior —
+	 * also the no-rebuild kill switch: delete `sessionId` from data.json.
+	 */
+	sessionId?: string;
+	/**
 	 * Injectable spawn factory. Defaults to Node's child_process.spawn.
 	 * Tests provide a fake-pi factory to exercise the real transport path.
 	 */
@@ -290,6 +297,7 @@ export class PiClient {
 			timeoutMs: opts.timeoutMs ?? DEFAULT_PI_TIMEOUT_MS,
 			drainGraceMs: opts.drainGraceMs ?? DEFAULT_DRAIN_GRACE_MS,
 			piCommand: opts.piCommand ?? null,
+			sessionId: opts.sessionId ?? "",
 			spawnCommand: opts.spawnCommand ?? spawn,
 			onStatusChange: opts.onStatusChange ?? (() => {}),
 			onDelta: opts.onDelta ?? (() => {}),
@@ -350,6 +358,14 @@ export class PiClient {
 		return `pi-${Date.now()}-${this.nextId++}`;
 	}
 
+	/**
+	 * True while a prompt is running, queued, or the queue is held draining
+	 * (#20). The fresh-thread command refuses to run in this state (#42).
+	 */
+	isBusy(): boolean {
+		return this.active !== null || this.draining || this.queue.length > 0;
+	}
+
 	/** Ensure the hidden pi process is running. */
 	async ensureSpawned(): Promise<void> {
 		if (this.process && this.process.exitCode === null) {
@@ -376,9 +392,17 @@ export class PiClient {
 		const nodeBin = await resolveNodePath();
 		const cmd = nodeBin;
 		// --thinking off: ;; note Q&A is fast inline exchange, not extended reasoning.
-		// glm-5.2 (and other reasoning models) otherwise emit long thinking_delta
+		// glm-5.3 (and other reasoning models) otherwise emit long thinking_delta
 		// streams before any text_delta, so the callout appears frozen while it thinks.
-		const args = [cliJs ? cliJs : "dist/cli.js", "--mode", "rpc", "--no-session", "--thinking", "off"];
+		const args = [cliJs ? cliJs : "dist/cli.js", "--mode", "rpc", "--thinking", "off"];
+		// #42: a stable session id makes the thread resumable across process death.
+		// pi's `--session-id` is find-or-create (dist/main.js createSessionManager),
+		// so no reattach logic is needed here — a respawn reopens the same file.
+		if (this.opts.sessionId) {
+			args.push("--session-id", this.opts.sessionId);
+		} else {
+			args.push("--no-session");
+		}
 		const env = {
 			...process.env,
 			// Keep a node-bearing PATH in case cli.js spawns children that need node.
