@@ -392,7 +392,7 @@ export class PiClient {
 		const nodeBin = await resolveNodePath();
 		const cmd = nodeBin;
 		// --thinking off: ;; note Q&A is fast inline exchange, not extended reasoning.
-		// glm-5.2 (and other reasoning models) otherwise emit long thinking_delta
+		// glm-5.3 (and other reasoning models) otherwise emit long thinking_delta
 		// streams before any text_delta, so the callout appears frozen while it thinks.
 		const args = [cliJs ? cliJs : "dist/cli.js", "--mode", "rpc", "--thinking", "off"];
 		// #42: a stable session id makes the thread resumable across process death.
