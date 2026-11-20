@@ -4,16 +4,85 @@ Chat with [pi](https://pi.ai/) inline in your Obsidian notes. Type `;;` where yo
 
 A port of [inline-claude](https://github.com/bawakul/inline-claude) to the pi agent harness: same itch (ask about what you're writing, without leaving the note), new engine (pi over RPC, whatever model your pi runs).
 
-<!-- demo GIF goes here — assets/demo.gif, ~15s: ;; question → status bar activity → callout settles -->
+<!-- demo GIF goes here — assets/demo.gif, ~15s: ;; question → status bar activity → callout settles (tsk T62) -->
+
+<!-- BAWARESECTION: The idea — yours to write. Reference material from inline-claude's README:
+     the "driver's seat" framing ("you're writing — your thoughts, your notes, your flow —
+     and the assistant is just there when you need it… the AI fits into your environment,
+     not the other way around") + the malleable-software link
+     (https://www.geoffreylitt.com/2023/03/25/llm-end-user-programming.html).
+     Adapt to inline-pi's story: no channel server, any provider, the note is the context. -->
 
 ## How it works
 
-- Type `;; your question` on a line in any note — works on canvas nodes too
+- Type `;; your question` on a line in any note
 - A pending callout marks the question; the status bar shows what pi is doing (spawning, thinking, running a tool, streaming)
 - The note around your cursor travels with the question, so answers are about what you're actually writing
 - The answer settles in as a collapsible callout titled with your question
 
-Desktop Obsidian only. Needs a local pi install — it speaks to pi, pi speaks to the model.
+## Requirements
+
+- [Obsidian](https://obsidian.md/), desktop only
+- A local [pi](https://pi.ai/) install, logged in — pi runs the model, so the provider and model are configured in pi, not in this plugin
+- `node` reachable on your login shell PATH (the plugin spawns node + pi's CLI directly)
+- Whatever your pi talks to — no specific subscription or API is required by the plugin itself
+
+## Setup
+
+Personal-tool stage: no releases, no installer, no plugin store. You build it.
+
+1. Clone the repo
+2. `npm install && npm run build`
+3. Link or copy `main.js`, `manifest.json`, and `styles.css` into your vault's `.obsidian/plugins/inline-pi/` (a symlink works — the plugin always runs what you build)
+4. Obsidian → Settings → Community plugins → enable **Inline Pi**
+5. Optional: set a working directory in the plugin settings (see below)
+
+## Settings
+
+| Setting | Default | What it does |
+|---------|---------|--------------|
+| Trigger phrase | `;;` | Text that opens the question prompt |
+| Pi working directory | *(blank = vault root)* | Passed to pi as its cwd. Point it at a project folder and pi inherits that project's `AGENTS.md`, memory, skills, and MCP servers |
+| Response timeout | `300` s | How long to wait before timing out |
+| Enable debug log | on | Writes a full event trace to `~/.pi/inline-pi-debug.log` |
+
+## What it writes to your vault
+
+**Nothing.** No `.mcp.json`, no `CLAUDE.md`, no channel server script — the plugin never modifies your vault's config or content on its own. (That was the old inline-claude architecture; the port removed all of it.)
+
+What does exist:
+
+- Plugin settings live in Obsidian's standard `.obsidian/plugins/inline-pi/data.json`
+- The debug log (if enabled) writes to `~/.pi/inline-pi-debug.log` — outside the vault
+
+## Security & trust model
+
+**Be honest about what this is.** A `;;` question hands your prompt — plus the note text around your cursor — to a full pi agent running with your pi's tool access.
+
+**What pi can do through this plugin:**
+
+- Read and write files (not just inside your vault)
+- Run shell commands
+- Search the web
+
+…whatever your pi configuration allows. The plugin doesn't restrict pi's toolset.
+
+**What the plugin is: a transparent pipe.** It spawns `pi --mode rpc` per question, sends one payload (instructions + note context + your question), and renders the response as a callout. There is exactly **one** instruction source — `INSTRUCTIONS_PREFIX` in [`src/instructions.ts`](./src/instructions.ts) — sent verbatim with every prompt. Nothing hidden, no vault-level instruction files.
+
+**What the plugin does NOT do:**
+
+- No telemetry, no analytics, no external network calls of its own
+- No background processing — every interaction starts with you typing `;;`
+- No writes to your vault (see above)
+
+**Prompt injection is a real risk.** The note around your cursor travels with every question — so web clips, imports, or shared notes containing hostile instructions will reach the model. That's inherent to any LLM reading untrusted text; the practical guardrail is what your pi is allowed to touch.
+
+**The working-directory setting is a trust surface too.** Pointing it at a project folder means pi loads that project's `AGENTS.md`, memory, and skills on every `;;` — powerful, but it's you vouching for that folder's contents.
+
+> **If you wouldn't run pi in a directory, don't `;;` in a note in that vault.**
+
+<!-- BAWARESECTION: The log so far — yours to rework. Current draft entries below;
+     rewrite in your voice, keep the beats you want. -->
 
 ## The log so far
 
@@ -29,6 +98,7 @@ A running record of the build, in plain words. Root-causes and decision records 
 
 Honest state, so nobody has to discover these the hard way:
 
+- `;;` in **canvas nodes is broken** — the suggestion popup dead-ends ("selectSuggestion called without a file") and nothing happens. It has never worked live — only unit tests ever exercised it ([#18](https://github.com/bawakul/inline-pi/issues/18))
 - Every `;;` starts a fresh session — no conversation continuation yet
 - A one-word question can still trigger a full agent run — slower than it should be
 - Personal-tool stage: no releases, no installer — clone, build, bring your own pi

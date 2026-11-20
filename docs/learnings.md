@@ -111,3 +111,15 @@ The other `pi` processes in `ps aux | grep pi` were **terminal pi sessions** (pa
 **Fix:** the test sets `ch: 28` (derived from the line length, with a comment explaining the semantics).
 
 **Lesson:** derive cursors from `line.length`, never a hardcoded index — and when a new test "reproduces the bug," suspect the test's own input before suspecting the code. Tests can lie in both directions.
+
+---
+
+## 2026-10-30 · The type dictionary lies — `EditorSuggestContext.file` is typed as always-present, but the runtime hands you `null` on canvas (#18)
+
+**Symptom:** canvas `;;` dead-ended at the `if (!file)` guard while TypeScript never flagged anything — no error, no warning, across the entire life of the bug.
+
+**Root cause:** TypeScript doesn't check code against the real Obsidian program; it checks against a *description file* (`obsidian.d.ts`) that ships with the package. Its entry for the suggestion popup promises "you will always receive a file." The running program never reads that description — on canvas it passes `null`. So the guard looked like dead code to the type-checker while being the only thing standing between the plugin and a silent dead end. The bug was fully visible at runtime and fully invisible at type-check time, forever.
+
+**The tell:** writing a *test* for the broken case required force-casting — deliberately overruling TypeScript ("trust me, sometimes there is no file"). When you have to argue with the type-checker to reproduce a bug that is actually happening, the dictionary is wrong, not your code.
+
+**Lesson:** treat type definitions as claims, not facts — especially at the edges where the plugin meets someone else's program. When behavior smells wrong, hand-verify what the runtime actually delivers (debug log, a `console.log` of the value) before trusting what the types promise.
